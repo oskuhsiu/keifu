@@ -9,6 +9,7 @@ use crossterm::event::Event;
 
 use keifu::{
     app::App,
+    config::Config,
     debug_server,
     event::{EventReader, InputEvent},
     git::configure_git_extensions,
@@ -55,7 +56,8 @@ fn main() -> Result<()> {
 
     configure_git_extensions()?;
 
-    // Initialize application
+    // Initialize application and UI layout configuration
+    let layout_config = Config::load().layout;
     let mut app = App::new()?;
 
     // Initialize terminal
@@ -74,7 +76,7 @@ fn main() -> Result<()> {
         // Render
         let draw_started = std::time::Instant::now();
         terminal.draw(|frame| {
-            ui::draw(frame, &mut app);
+            ui::draw(frame, &mut app, &layout_config);
         })?;
         app.perf.record("draw", draw_started.elapsed());
 
