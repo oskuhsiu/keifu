@@ -3,6 +3,7 @@
 pub mod commit_detail;
 pub mod dialog;
 pub mod file_diff_view;
+pub mod file_preview;
 pub mod graph_view;
 pub mod help_popup;
 pub mod search_dropdown;
@@ -123,6 +124,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, layout_config: &LayoutConfig) {
         return;
     }
 
+    // Returning to the graph restores the commit-detail pane and its previous scroll position.
+    file_preview::restore_commit_detail_when_normal(app);
+
     // FileDiff mode: full-screen diff view
     if let AppMode::FileDiff {
         content,
@@ -209,12 +213,19 @@ pub fn draw(frame: &mut Frame, app: &mut App, layout_config: &LayoutConfig) {
         status_bar: status_area,
     };
 
-    // Update detail viewport size and clamp the scroll before rendering
-    app.detail_viewport_height = commit_area.height.saturating_sub(2);
-    let commit_widget = CommitDetailWidget::new(app);
-    app.detail_content_height = commit_widget.estimated_height(commit_area.width.saturating_sub(2));
-    app.scroll_detail(0);
-    let commit_widget = commit_widget.with_scroll(app.detail_scroll);
+    // The middle pane becomes a live file-diff preview for the entire FileSelect mode.
+    // It changes back to Commit Detail only after FileSelect is exited to the graph.
+    let showing_file_preview = matches!(app.mode, AppMode::FileSelect { .. });
+    if showing_file_preview {
+        file_preview::render(frame, app, commit_area);
+    } else {
+        app.detail_viewport_height = commit_area.height.saturating_sub(2);
+        let commit_widget = CommitDetailWidget::new(app);
+        app.detail_content_height =
+            commit_widget.estimated_height(commit_area.width.saturating_sub(2));
+        app.scroll_detail(0);
+        frame.render_widget(commit_widget.with_scroll(app.detail_scroll), commit_area);
+    }
 
     let files_widget = FileListWidget::new(app);
     app.files_pane_scroll = files_widget.scroll_offset(files_area);
@@ -225,7 +236,6 @@ pub fn draw(frame: &mut Frame, app: &mut App, layout_config: &LayoutConfig) {
         graph_area,
         &mut app.graph_list_state,
     );
-    frame.render_widget(commit_widget, commit_area);
     frame.render_widget(files_widget, files_area);
 
     // Scrollbars
