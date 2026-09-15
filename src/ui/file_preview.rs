@@ -4,12 +4,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 
 use git2::Oid;
-use ratatui::{
-    layout::Rect,
-    text::Line,
-    widgets::Paragraph,
-    Frame,
-};
+use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
 
 use crate::{
     app::{App, AppMode},
@@ -80,9 +75,7 @@ fn load_preview(app: &App, key: &PreviewKey) -> PreviewData {
         PreviewTarget::Uncommitted => {
             FileDiffContent::from_working_tree(&app.repo.repo, &key.path)
         }
-        PreviewTarget::Commit(oid) => {
-            FileDiffContent::from_commit(&app.repo.repo, oid, &key.path)
-        }
+        PreviewTarget::Commit(oid) => FileDiffContent::from_commit(&app.repo.repo, oid, &key.path),
     };
 
     match result {
@@ -161,7 +154,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         let needs_reload = preview_session
             .cache
             .as_ref()
-            .is_none_or(|cache| cache.key != key);
+            .map_or(true, |cache| cache.key != key);
 
         if needs_reload {
             preview_session.cache = Some(PreviewCache {
