@@ -20,7 +20,10 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, AppMode, InputAction};
+use crate::{
+    app::{App, AppMode, InputAction},
+    config::{LayoutConfig, LayoutDirection},
+};
 
 use self::{
     commit_detail::{CommitDetailWidget, FileListWidget},
@@ -40,9 +43,6 @@ const MIN_HEIGHT: u16 = 6;
 /// Minimum widget dimensions for safe rendering
 pub const MIN_WIDGET_WIDTH: u16 = 12;
 pub const MIN_WIDGET_HEIGHT: u16 = 3;
-
-/// Width threshold for switching the detail area to a vertical layout
-const VERTICAL_LAYOUT_THRESHOLD: u16 = 56;
 
 /// Border style for a pane depending on focus
 pub fn pane_border_style(focused: bool) -> Style {
@@ -96,20 +96,6 @@ pub fn render_scrollbar(
     );
 }
 
-/// Split the detail area into commit info and file list panes
-pub fn split_detail_area(area: Rect) -> (Rect, Rect) {
-    let direction = if area.width <= VERTICAL_LAYOUT_THRESHOLD {
-        Direction::Vertical
-    } else {
-        Direction::Horizontal
-    };
-    let chunks = Layout::default()
-        .direction(direction)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
-    (chunks[0], chunks[1])
-}
-
 /// Render a placeholder block when widget area is too small
 pub fn render_placeholder_block(area: Rect, buf: &mut Buffer) {
     let block = Block::default()
@@ -120,7 +106,7 @@ pub fn render_placeholder_block(area: Rect, buf: &mut Buffer) {
 }
 
 /// Render the main UI
-pub fn draw(frame: &mut Frame, app: &mut App) {
+pub fn draw(frame: &mut Frame, app: &mut App, layout_config: &LayoutConfig) {
     // Update the diff cache once before rendering
     app.update_diff_cache();
 
@@ -186,7 +172,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
 
-    // Vertical split: main area + status bar (1 row)
+    // Split the screen into the configurable main area and the fixed 1-row status bar.
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(1)])
@@ -195,15 +181,25 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let main_area = vertical[0];
     let status_area = vertical[1];
 
-    // Split main area vertically: graph (70%) + detail (30%)
-    let content_vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+    // Split the main area into graph / commit detail / files according to config.
+    // The status bar above is excluded from these percentages.
+    let direction = match layout_config.direction {
+        LayoutDirection::Vertical => Direction::Vertical,
+        LayoutDirection::Horizontal => Direction::Horizontal,
+    };
+    let [graph_percent, commit_percent, files_percent] = layout_config.percentages();
+    let content = Layout::default()
+        .direction(direction)
+        .constraints([
+            Constraint::Percentage(graph_percent),
+            Constraint::Percentage(commit_percent),
+            Constraint::Percentage(files_percent),
+        ])
         .split(main_area);
 
-    let graph_area = content_vertical[0];
-    let detail_area = content_vertical[1];
-    let (commit_area, files_area) = split_detail_area(detail_area);
+    let graph_area = content[0];
+    let commit_area = content[1];
+    let files_area = content[2];
 
     // Record pane regions for mouse hit-testing
     app.layout = crate::app::LayoutMap {
