@@ -21,7 +21,7 @@ use super::{
     pane_block,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PreviewTarget {
     Uncommitted,
     Commit(Oid),
