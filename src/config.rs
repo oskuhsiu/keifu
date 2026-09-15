@@ -32,17 +32,12 @@ impl Default for GraphConfig {
 }
 
 /// Main pane layout direction
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LayoutDirection {
+    #[default]
     Vertical,
     Horizontal,
-}
-
-impl Default for LayoutDirection {
-    fn default() -> Self {
-        Self::Vertical
-    }
 }
 
 /// Main pane layout configuration.
@@ -76,7 +71,8 @@ impl LayoutConfig {
     /// percentage is considered invalid because hiding panes is not part of
     /// the layout configuration contract.
     pub fn percentages(&self) -> [u16; 3] {
-        let total = u32::from(self.graph) + u32::from(self.commit) + u32::from(self.files);
+        let total =
+            u32::from(self.graph) + u32::from(self.commit) + u32::from(self.files);
         if self.graph > 0 && self.commit > 0 && self.files > 0 && total == 100 {
             [self.graph, self.commit, self.files]
         } else {
