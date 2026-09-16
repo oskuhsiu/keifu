@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::event::Event;
+use crossterm::event::{Event, KeyCode, KeyModifiers};
 
 use keifu::{
     app::App,
@@ -14,7 +14,7 @@ use keifu::{
     event::{EventReader, InputEvent},
     git::configure_git_extensions,
     keybindings::map_key_to_action,
-    logging, mouse, tui, ui,
+    logging, mouse, selection, tui, ui,
 };
 
 const MAINTENANCE_IDLE_PERIOD: Duration = Duration::from_millis(250);
@@ -56,8 +56,10 @@ fn main() -> Result<()> {
 
     configure_git_extensions()?;
 
-    // Initialize application and UI layout configuration
-    let layout_config = Config::load().layout;
+    // Initialize application and UI configuration
+    let config = Config::load();
+    let layout_config = config.layout.clone();
+    selection::configure(config.selection.auto_copy);
     let mut app = App::new()?;
 
     // Initialize terminal
@@ -79,6 +81,9 @@ fn main() -> Result<()> {
             ui::draw(frame, &mut app, &layout_config);
         })?;
         app.perf.record("draw", draw_started.elapsed());
+        if let Err(error) = selection::flush_auto_copy() {
+            app.set_message(format!("Copy failed: {error}"));
+        }
 
         // Exit check
         if app.should_quit {
@@ -101,6 +106,19 @@ fn main() -> Result<()> {
             for event in events {
                 match event {
                     InputEvent::Terminal(Event::Key(key)) => {
+                        // A completed Keifu selection owns `y`; otherwise the
+                        // normal mode keeps its existing copy-hash behavior.
+                        if key.modifiers == KeyModifiers::NONE
+                            && key.code == KeyCode::Char('y')
+                            && selection::has_selected_text()
+                        {
+                            match selection::copy_selected() {
+                                Ok(true) => app.set_message("Copied selection"),
+                                Ok(false) => {}
+                                Err(error) => app.set_message(format!("Copy failed: {error}")),
+                            }
+                            continue;
+                        }
                         if let Some(action) = map_key_to_action(key, &app.mode) {
                             if let Err(e) = app.handle_action(action) {
                                 // Show errors in the UI
