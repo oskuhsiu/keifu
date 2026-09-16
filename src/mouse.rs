@@ -11,6 +11,7 @@ use ratatui::layout::{Position, Rect};
 use crate::{
     action::Action,
     app::{App, AppMode, FocusedPane},
+    selection,
 };
 
 /// Max delay between two clicks on the same cell to count as a double-click
@@ -19,7 +20,19 @@ const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 pub fn handle_mouse(app: &mut App, event: MouseEvent) {
     match event.kind {
         MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => handle_scroll(app, event, 1),
-        MouseEventKind::Down(MouseButton::Left) => handle_click(app, event.column, event.row),
+        MouseEventKind::Down(MouseButton::Left) => {
+            let started_selection = selection::begin(event.column, event.row);
+            if !started_selection {
+                selection::clear();
+            }
+            handle_click(app, event.column, event.row);
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            selection::drag(event.column, event.row);
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            selection::finish(event.column, event.row);
+        }
         _ => {}
     }
 }
@@ -168,7 +181,8 @@ fn handle_click(app: &mut App, x: u16, y: u16) {
                 }
             }
         }
-        // FileDiff / Input / Confirm: keyboard only for now
+        // FileDiff / Input / Confirm: keyboard only for normal actions.
+        // FileDiff mouse drag selection is handled above before this match.
         _ => {}
     }
 }
