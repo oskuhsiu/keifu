@@ -232,19 +232,20 @@ pub fn finish(x: u16, y: u16) -> bool {
             return false;
         };
         if selection.context != viewport.context {
-            state.selection = None;
             return false;
         }
         selection.cursor = point;
         selection.dragged |= point != selection.anchor;
-        if !selection.dragged {
-            state.selection = None;
-            return false;
+        let dragged = selection.dragged;
+        if dragged {
+            selection.finalized = true;
+            selection.captured = false;
+            selection.pending_auto_copy = auto_copy;
         }
-        selection.finalized = true;
-        selection.captured = false;
-        selection.pending_auto_copy = auto_copy;
-        true
+        if !dragged {
+            state.selection = None;
+        }
+        dragged
     })
 }
 
@@ -300,7 +301,8 @@ pub fn flush_auto_copy() -> Result<bool> {
 /// Apply selection highlighting to the already-rendered terminal buffer and
 /// capture the selected visible text when the drag is finalized.
 pub fn render_overlay(frame: &mut Frame) {
-    frame.render_widget(SelectionOverlay, frame.area());
+    let area = frame.area();
+    frame.render_widget(SelectionOverlay, area);
 }
 
 struct SelectionOverlay;
