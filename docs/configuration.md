@@ -76,6 +76,26 @@ zero. Invalid combinations fall back to the default `50 / 25 / 25` split.
 This setting controls pane layout only. It does not hide panes or change the
 contents rendered inside graph, commit detail, or files.
 
+## Text selection
+
+Commit Detail, the inline file-diff preview, and the full-screen diff support
+pane-aware mouse drag selection. Selection is limited to the pane content: it
+does not include borders, titles, scrollbars, or neighboring panes. The logical
+selection is preserved when the pane scrolls.
+
+By default, releasing the mouse immediately copies the selected text using the
+same OSC 52 clipboard support as the existing copy commands:
+
+```toml
+[selection]
+auto_copy = true
+```
+
+Set `auto_copy = false` to keep the selection highlighted without copying it on
+mouse release. Press `y` to copy an existing selection manually. When there is
+no selection, Normal mode keeps the existing `y` behavior for copying the
+selected commit hash.
+
 ### Options
 
 | Key | Type | Default | Description |
@@ -90,6 +110,7 @@ contents rendered inside graph, commit detail, or files.
 | `layout.graph` | integer | `50` | Percentage of the main content area used by the graph pane |
 | `layout.commit` | integer | `25` | Percentage of the main content area used by commit detail |
 | `layout.files` | integer | `25` | Percentage of the main content area used by changed files |
+| `selection.auto_copy` | bool | `true` | Copy a completed Keifu text selection to the clipboard on mouse release |
 
 ### Disabling auto-refresh
 
