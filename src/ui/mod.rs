@@ -24,6 +24,7 @@ use ratatui::{
 use crate::{
     app::{App, AppMode, InputAction},
     config::{LayoutConfig, LayoutDirection},
+    selection,
 };
 
 use self::{
@@ -106,8 +107,26 @@ pub fn render_placeholder_block(area: Rect, buf: &mut Buffer) {
     block.render(area, buf);
 }
 
+fn selected_graph_context(app: &App) -> String {
+    let Some(index) = app.graph_list_state.selected() else {
+        return "none".to_string();
+    };
+    let Some(node) = app.graph_layout.nodes.get(index) else {
+        return format!("missing:{index}");
+    };
+    if node.is_uncommitted {
+        "uncommitted".to_string()
+    } else if let Some(commit) = &node.commit {
+        commit.oid.to_string()
+    } else {
+        format!("connector:{index}")
+    }
+}
+
 /// Render the main UI
 pub fn draw(frame: &mut Frame, app: &mut App, layout_config: &LayoutConfig) {
+    selection::begin_frame();
+
     // Update the diff cache once before rendering
     app.update_diff_cache();
 
@@ -173,6 +192,22 @@ pub fn draw(frame: &mut Frame, app: &mut App, layout_config: &LayoutConfig) {
         let status_bar = StatusBar::new(app);
         app.status_hints = status_bar.hint_regions(vertical[1]);
         frame.render_widget(status_bar, vertical[1]);
+
+        let selectable = vertical[0].inner(Margin {
+            vertical: 1,
+            horizontal: 1,
+        });
+        selection::set_viewport(
+            selectable,
+            *scroll_offset,
+            *horizontal_offset,
+            format!(
+                "full-diff:{}:{}",
+                selected_graph_context(app),
+                content.path.to_string_lossy()
+            ),
+        );
+        selection::render_overlay(frame);
         return;
     }
 
@@ -257,6 +292,41 @@ pub fn draw(frame: &mut Frame, app: &mut App, layout_config: &LayoutConfig) {
     let status_bar = StatusBar::new(app);
     app.status_hints = status_bar.hint_regions(status_area);
     frame.render_widget(status_bar, status_area);
+
+    let selectable = commit_area.inner(Margin {
+        vertical: 1,
+        horizontal: 1,
+    });
+    match &app.mode {
+        AppMode::Normal => selection::set_viewport(
+            selectable,
+            app.detail_scroll as usize,
+            0,
+            format!("commit-detail:{}", selected_graph_context(app)),
+        ),
+        AppMode::FileSelect {
+            selected_index,
+            file_list,
+        } => {
+            let path = file_list
+                .get(*selected_index)
+                .map(|file| file.path.to_string_lossy())
+                .unwrap_or_default();
+            selection::set_viewport(
+                selectable,
+                app.detail_scroll as usize,
+                0,
+                format!(
+                    "inline-diff:{}:{}:{}",
+                    selected_graph_context(app),
+                    selected_index,
+                    path
+                ),
+            );
+        }
+        _ => {}
+    }
+    selection::render_overlay(frame);
 
     // Branch info popup (when multiple branches exist on selected node)
     render_branch_info_popup(frame, app, graph_area);
