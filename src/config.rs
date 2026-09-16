@@ -11,6 +11,7 @@ pub struct Config {
     pub refresh: RefreshConfig,
     pub graph: GraphConfig,
     pub layout: LayoutConfig,
+    pub selection: SelectionConfig,
 }
 
 /// Commit graph display configuration
@@ -82,6 +83,20 @@ impl LayoutConfig {
     }
 }
 
+/// Pane-aware text selection configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SelectionConfig {
+    /// Automatically copy a completed mouse selection to the clipboard.
+    pub auto_copy: bool,
+}
+
+impl Default for SelectionConfig {
+    fn default() -> Self {
+        Self { auto_copy: true }
+    }
+}
+
 /// Auto-refresh configuration
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -146,7 +161,7 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::{LayoutConfig, LayoutDirection};
+    use super::{LayoutConfig, LayoutDirection, SelectionConfig};
 
     #[test]
     fn layout_defaults_to_vertical_50_25_25() {
@@ -183,5 +198,10 @@ mod tests {
             ..LayoutConfig::default()
         };
         assert_eq!(hidden_pane.percentages(), [50, 25, 25]);
+    }
+
+    #[test]
+    fn selection_auto_copy_defaults_to_true() {
+        assert!(SelectionConfig::default().auto_copy);
     }
 }
