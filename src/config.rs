@@ -10,6 +10,8 @@ use serde::Deserialize;
 pub struct Config {
     pub refresh: RefreshConfig,
     pub graph: GraphConfig,
+    pub layout: LayoutConfig,
+    pub selection: SelectionConfig,
 }
 
 /// Commit graph display configuration
@@ -27,6 +29,71 @@ impl Default for GraphConfig {
             show_remote_branches: true,
             show_tags: true,
         }
+    }
+}
+
+/// Main pane layout direction
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LayoutDirection {
+    #[default]
+    Vertical,
+    Horizontal,
+}
+
+/// Main pane layout configuration.
+///
+/// Percentages apply to the main area only. The one-row bottom status line is
+/// excluded before the graph / commit detail / files split is calculated.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct LayoutConfig {
+    pub direction: LayoutDirection,
+    pub graph: u16,
+    pub commit: u16,
+    pub files: u16,
+}
+
+impl Default for LayoutConfig {
+    fn default() -> Self {
+        Self {
+            direction: LayoutDirection::Vertical,
+            graph: 50,
+            commit: 25,
+            files: 25,
+        }
+    }
+}
+
+impl LayoutConfig {
+    /// Return validated graph / commit / files percentages.
+    ///
+    /// Invalid values fall back to the default 50 / 25 / 25 layout. A zero
+    /// percentage is considered invalid because hiding panes is not part of
+    /// the layout configuration contract.
+    pub fn percentages(&self) -> [u16; 3] {
+        let total =
+            u32::from(self.graph) + u32::from(self.commit) + u32::from(self.files);
+        if self.graph > 0 && self.commit > 0 && self.files > 0 && total == 100 {
+            [self.graph, self.commit, self.files]
+        } else {
+            let default = Self::default();
+            [default.graph, default.commit, default.files]
+        }
+    }
+}
+
+/// Pane-aware text selection configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SelectionConfig {
+    /// Automatically copy a completed mouse selection to the clipboard.
+    pub auto_copy: bool,
+}
+
+impl Default for SelectionConfig {
+    fn default() -> Self {
+        Self { auto_copy: true }
     }
 }
 
@@ -89,5 +156,52 @@ impl Config {
             .ok()
             .and_then(|content| toml::from_str(&content).ok())
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LayoutConfig, LayoutDirection, SelectionConfig};
+
+    #[test]
+    fn layout_defaults_to_vertical_50_25_25() {
+        let layout = LayoutConfig::default();
+        assert_eq!(layout.direction, LayoutDirection::Vertical);
+        assert_eq!(layout.percentages(), [50, 25, 25]);
+    }
+
+    #[test]
+    fn valid_layout_percentages_are_preserved() {
+        let layout = LayoutConfig {
+            direction: LayoutDirection::Horizontal,
+            graph: 60,
+            commit: 20,
+            files: 20,
+        };
+        assert_eq!(layout.percentages(), [60, 20, 20]);
+    }
+
+    #[test]
+    fn invalid_layout_percentages_fall_back_to_defaults() {
+        let invalid_total = LayoutConfig {
+            graph: 60,
+            commit: 30,
+            files: 30,
+            ..LayoutConfig::default()
+        };
+        assert_eq!(invalid_total.percentages(), [50, 25, 25]);
+
+        let hidden_pane = LayoutConfig {
+            graph: 50,
+            commit: 50,
+            files: 0,
+            ..LayoutConfig::default()
+        };
+        assert_eq!(hidden_pane.percentages(), [50, 25, 25]);
+    }
+
+    #[test]
+    fn selection_auto_copy_defaults_to_true() {
+        assert!(SelectionConfig::default().auto_copy);
     }
 }

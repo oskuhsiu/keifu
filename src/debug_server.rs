@@ -24,6 +24,7 @@ use serde_json::{json, Value};
 
 use crate::{
     app::{App, AppMode, FocusedPane},
+    config::Config,
     keybindings::map_key_to_action,
     mouse, ui,
 };
@@ -157,8 +158,9 @@ pub fn handle_request(app: &mut App, width: u16, height: u16, request: DebugRequ
 fn render_to_text(app: &mut App, width: u16, height: u16) -> Result<String> {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend)?;
+    let layout_config = Config::load().layout;
     let started = std::time::Instant::now();
-    terminal.draw(|frame| ui::draw(frame, app))?;
+    terminal.draw(|frame| ui::draw(frame, app, &layout_config))?;
     app.perf.record("draw.dump", started.elapsed());
 
     let buffer = terminal.backend().buffer();

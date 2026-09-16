@@ -3,6 +3,7 @@
 pub mod commit_detail;
 pub mod dialog;
 pub mod file_diff_view;
+pub mod file_preview;
 pub mod graph_view;
 pub mod help_popup;
 pub mod search_dropdown;
@@ -20,7 +21,11 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, AppMode, InputAction};
+use crate::{
+    app::{App, AppMode, InputAction},
+    config::{LayoutConfig, LayoutDirection},
+    selection,
+};
 
 use self::{
     commit_detail::{CommitDetailWidget, FileListWidget},
@@ -40,9 +45,6 @@ const MIN_HEIGHT: u16 = 6;
 /// Minimum widget dimensions for safe rendering
 pub const MIN_WIDGET_WIDTH: u16 = 12;
 pub const MIN_WIDGET_HEIGHT: u16 = 3;
-
-/// Width threshold for switching the detail area to a vertical layout
-const VERTICAL_LAYOUT_THRESHOLD: u16 = 56;
 
 /// Border style for a pane depending on focus
 pub fn pane_border_style(focused: bool) -> Style {
@@ -96,20 +98,6 @@ pub fn render_scrollbar(
     );
 }
 
-/// Split the detail area into commit info and file list panes
-pub fn split_detail_area(area: Rect) -> (Rect, Rect) {
-    let direction = if area.width <= VERTICAL_LAYOUT_THRESHOLD {
-        Direction::Vertical
-    } else {
-        Direction::Horizontal
-    };
-    let chunks = Layout::default()
-        .direction(direction)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
-    (chunks[0], chunks[1])
-}
-
 /// Render a placeholder block when widget area is too small
 pub fn render_placeholder_block(area: Rect, buf: &mut Buffer) {
     let block = Block::default()
@@ -119,8 +107,26 @@ pub fn render_placeholder_block(area: Rect, buf: &mut Buffer) {
     block.render(area, buf);
 }
 
+fn selected_graph_context(app: &App) -> String {
+    let Some(index) = app.graph_list_state.selected() else {
+        return "none".to_string();
+    };
+    let Some(node) = app.graph_layout.nodes.get(index) else {
+        return format!("missing:{index}");
+    };
+    if node.is_uncommitted {
+        "uncommitted".to_string()
+    } else if let Some(commit) = &node.commit {
+        commit.oid.to_string()
+    } else {
+        format!("connector:{index}")
+    }
+}
+
 /// Render the main UI
-pub fn draw(frame: &mut Frame, app: &mut App) {
+pub fn draw(frame: &mut Frame, app: &mut App, layout_config: &LayoutConfig) {
+    selection::begin_frame();
+
     // Update the diff cache once before rendering
     app.update_diff_cache();
 
@@ -136,6 +142,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(paragraph, area);
         return;
     }
+
+    // Returning to the graph restores the commit-detail pane and its previous scroll position.
+    file_preview::restore_commit_detail_when_normal(app);
 
     // FileDiff mode: full-screen diff view
     if let AppMode::FileDiff {
@@ -183,10 +192,26 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let status_bar = StatusBar::new(app);
         app.status_hints = status_bar.hint_regions(vertical[1]);
         frame.render_widget(status_bar, vertical[1]);
+
+        let selectable = vertical[0].inner(Margin {
+            vertical: 1,
+            horizontal: 1,
+        });
+        selection::set_viewport(
+            selectable,
+            *scroll_offset,
+            *horizontal_offset,
+            format!(
+                "full-diff:{}:{}",
+                selected_graph_context(app),
+                content.path.to_string_lossy()
+            ),
+        );
+        selection::render_overlay(frame);
         return;
     }
 
-    // Vertical split: main area + status bar (1 row)
+    // Split the screen into the configurable main area and the fixed 1-row status bar.
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(1)])
@@ -195,15 +220,25 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let main_area = vertical[0];
     let status_area = vertical[1];
 
-    // Split main area vertically: graph (70%) + detail (30%)
-    let content_vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+    // Split the main area into graph / commit detail / files according to config.
+    // The status bar above is excluded from these percentages.
+    let direction = match layout_config.direction {
+        LayoutDirection::Vertical => Direction::Vertical,
+        LayoutDirection::Horizontal => Direction::Horizontal,
+    };
+    let [graph_percent, commit_percent, files_percent] = layout_config.percentages();
+    let content = Layout::default()
+        .direction(direction)
+        .constraints([
+            Constraint::Percentage(graph_percent),
+            Constraint::Percentage(commit_percent),
+            Constraint::Percentage(files_percent),
+        ])
         .split(main_area);
 
-    let graph_area = content_vertical[0];
-    let detail_area = content_vertical[1];
-    let (commit_area, files_area) = split_detail_area(detail_area);
+    let graph_area = content[0];
+    let commit_area = content[1];
+    let files_area = content[2];
 
     // Record pane regions for mouse hit-testing
     app.layout = crate::app::LayoutMap {
@@ -213,12 +248,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         status_bar: status_area,
     };
 
-    // Update detail viewport size and clamp the scroll before rendering
-    app.detail_viewport_height = commit_area.height.saturating_sub(2);
-    let commit_widget = CommitDetailWidget::new(app);
-    app.detail_content_height = commit_widget.estimated_height(commit_area.width.saturating_sub(2));
-    app.scroll_detail(0);
-    let commit_widget = commit_widget.with_scroll(app.detail_scroll);
+    // The middle pane becomes a live file-diff preview for the entire FileSelect mode.
+    // It changes back to Commit Detail only after FileSelect is exited to the graph.
+    let showing_file_preview = matches!(app.mode, AppMode::FileSelect { .. });
+    if showing_file_preview {
+        file_preview::render(frame, app, commit_area);
+    } else {
+        app.detail_viewport_height = commit_area.height.saturating_sub(2);
+        let commit_widget = CommitDetailWidget::new(app);
+        app.detail_content_height =
+            commit_widget.estimated_height(commit_area.width.saturating_sub(2));
+        app.scroll_detail(0);
+        frame.render_widget(commit_widget.with_scroll(app.detail_scroll), commit_area);
+    }
 
     let files_widget = FileListWidget::new(app);
     app.files_pane_scroll = files_widget.scroll_offset(files_area);
@@ -229,7 +271,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         graph_area,
         &mut app.graph_list_state,
     );
-    frame.render_widget(commit_widget, commit_area);
     frame.render_widget(files_widget, files_area);
 
     // Scrollbars
@@ -251,6 +292,41 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let status_bar = StatusBar::new(app);
     app.status_hints = status_bar.hint_regions(status_area);
     frame.render_widget(status_bar, status_area);
+
+    let selectable = commit_area.inner(Margin {
+        vertical: 1,
+        horizontal: 1,
+    });
+    match &app.mode {
+        AppMode::Normal => selection::set_viewport(
+            selectable,
+            app.detail_scroll as usize,
+            0,
+            format!("commit-detail:{}", selected_graph_context(app)),
+        ),
+        AppMode::FileSelect {
+            selected_index,
+            file_list,
+        } => {
+            let path = file_list
+                .get(*selected_index)
+                .map(|file| file.path.to_string_lossy())
+                .unwrap_or_default();
+            selection::set_viewport(
+                selectable,
+                app.detail_scroll as usize,
+                0,
+                format!(
+                    "inline-diff:{}:{}:{}",
+                    selected_graph_context(app),
+                    selected_index,
+                    path
+                ),
+            );
+        }
+        _ => {}
+    }
+    selection::render_overlay(frame);
 
     // Branch info popup (when multiple branches exist on selected node)
     render_branch_info_popup(frame, app, graph_area);
