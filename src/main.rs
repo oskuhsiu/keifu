@@ -59,6 +59,7 @@ fn main() -> Result<()> {
     // Initialize application and UI configuration
     let config = Config::load();
     let layout_config = config.layout.clone();
+    let clear_selection_after_copy = config.selection.clear_after_copy;
     selection::configure(config.selection.auto_copy);
     let mut app = App::new()?;
 
@@ -81,8 +82,10 @@ fn main() -> Result<()> {
             ui::draw(frame, &mut app, &layout_config);
         })?;
         app.perf.record("draw", draw_started.elapsed());
-        if let Err(error) = selection::flush_auto_copy() {
-            app.set_message(format!("Copy failed: {error}"));
+        match selection::flush_auto_copy() {
+            Ok(true) if clear_selection_after_copy => selection::clear(),
+            Ok(_) => {}
+            Err(error) => app.set_message(format!("Copy failed: {error}")),
         }
 
         // Exit check
