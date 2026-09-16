@@ -23,8 +23,9 @@ keifu (系譜, /keːɸɯ/) is a terminal UI tool that visualizes Git commit grap
 - Commit list with branch labels, date, author, short hash, and message (some fields may be hidden on narrow terminals)
 - Commit detail panel with full message and changed file stats (+/-)
 - File diff view with syntax highlighting and word-level change emphasis
+- Pane-aware text selection in Commit Detail and diff views, with optional automatic clipboard copy
 - Git operations: checkout, create/delete branch, fetch, stage/unstage, commit, push
-- Mouse support: click to select commits/files/panes, clickable status bar hints, per-pane wheel scrolling
+- Mouse support: click to select commits/files/panes, drag to select text, clickable status bar hints, per-pane wheel scrolling
 - Branch search with dropdown UI
 - Remote-control debug server and file logging for agent-driven debugging (see [docs/debugging.md](docs/debugging.md))
 
@@ -125,11 +126,15 @@ Staging keys work when the "uncommitted changes" row is selected.
 | Click on a commit row | Select commit (double-click opens the file list) |
 | Click on a file row | Select file (double-click opens the diff) |
 | Click on a pane | Focus the pane |
+| Drag in Commit Detail / inline diff / full diff | Select text inside that pane |
 | Click on a status bar hint | Run that action |
 | Wheel scroll | Scrolls the pane under the cursor |
 
-Since keifu captures mouse input, use your terminal's modifier for native
-text selection (usually `Shift` + drag; `Fn` + drag on iTerm2).
+Keifu-managed text selection is limited to the pane content and never crosses
+pane borders, titles, scrollbars, or neighboring panes. By default, releasing
+the mouse copies the selection to the clipboard. Set
+`[selection] auto_copy = false` to keep it highlighted without automatic copy;
+press `y` to copy the current selection manually.
 
 Note: Ghostty currently fans one wheel notch out into multiple scroll events
 for mouse-mode apps ([ghostty#3955](https://github.com/ghostty-org/ghostty/discussions/3955)),
@@ -164,7 +169,7 @@ in the Ghostty config works around it.
 
 | Key | Action |
 | --- | --- |
-| `y` | Copy commit hash to clipboard (OSC 52) |
+| `y` | Copy current text selection; otherwise copy commit hash (OSC 52) |
 | `Y` | Copy branch name to clipboard (OSC 52) |
 | `R` | Refresh repository data |
 | `o` | Toggle remote branches |
