@@ -89,11 +89,16 @@ impl LayoutConfig {
 pub struct SelectionConfig {
     /// Automatically copy a completed mouse selection to the clipboard.
     pub auto_copy: bool,
+    /// Clear the highlight after a successful automatic copy.
+    pub clear_after_copy: bool,
 }
 
 impl Default for SelectionConfig {
     fn default() -> Self {
-        Self { auto_copy: true }
+        Self {
+            auto_copy: true,
+            clear_after_copy: true,
+        }
     }
 }
 
@@ -201,7 +206,9 @@ mod tests {
     }
 
     #[test]
-    fn selection_auto_copy_defaults_to_true() {
-        assert!(SelectionConfig::default().auto_copy);
+    fn selection_copy_defaults_to_auto_and_clear() {
+        let selection = SelectionConfig::default();
+        assert!(selection.auto_copy);
+        assert!(selection.clear_after_copy);
     }
 }
