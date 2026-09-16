@@ -84,17 +84,23 @@ does not include borders, titles, scrollbars, or neighboring panes. The logical
 selection is preserved when the pane scrolls.
 
 By default, releasing the mouse immediately copies the selected text using the
-same OSC 52 clipboard support as the existing copy commands:
+same OSC 52 clipboard support as the existing copy commands, then clears the
+selection highlight:
 
 ```toml
 [selection]
 auto_copy = true
+clear_after_copy = true
 ```
 
-Set `auto_copy = false` to keep the selection highlighted without copying it on
-mouse release. Press `y` to copy an existing selection manually. When there is
-no selection, Normal mode keeps the existing `y` behavior for copying the
-selected commit hash.
+Set `clear_after_copy = false` to keep the highlight after a successful automatic
+copy. Set `auto_copy = false` to disable copy-on-release entirely; the selection
+then remains highlighted until it is changed or cleared. Press `y` to copy an
+existing selection manually. Manual `y` copy does not clear the selection. When
+there is no selection, Normal mode keeps the existing `y` behavior for copying
+the selected commit hash.
+
+If automatic copy fails, the selection is kept even when `clear_after_copy = true`.
 
 ### Options
 
@@ -111,6 +117,7 @@ selected commit hash.
 | `layout.commit` | integer | `25` | Percentage of the main content area used by commit detail |
 | `layout.files` | integer | `25` | Percentage of the main content area used by changed files |
 | `selection.auto_copy` | bool | `true` | Copy a completed Keifu text selection to the clipboard on mouse release |
+| `selection.clear_after_copy` | bool | `true` | Clear the selection after a successful automatic copy |
 
 ### Disabling auto-refresh
 
