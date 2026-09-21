@@ -946,11 +946,11 @@ mod tests {
     fn compact_graph_keeps_multi_target_history_expanded() {
         let commits = vec![
             graph_commit('e', &['b', 'd']),
-            graph_commit('f', &['g', 'd']),
+            graph_commit('f', &['9', 'd']),
             graph_commit('d', &['c']),
             graph_commit('c', &['a']),
             graph_commit('b', &['a']),
-            graph_commit('g', &['a']),
+            graph_commit('9', &['a']),
             graph_commit('a', &[]),
         ];
         let branches = vec![graph_branch("main", 'e'), graph_branch("release", 'f')];
