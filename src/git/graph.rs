@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use git2::Oid;
 
-use super::{BranchInfo, CommitInfo, TagInfo};
+use super::{compact::MergeFoldPlan, BranchInfo, CommitInfo, TagInfo};
 use crate::graph::colors::{ColorAssigner, UNCOMMITTED_COLOR_INDEX};
 
 /// Graph node
@@ -39,6 +39,8 @@ pub enum CellType {
     Pipe(usize),
     /// Commit node
     Commit(usize),
+    /// Commit from uniquely-owned merged history, folded onto its target lane
+    FoldedCommit(usize),
     /// Start branch to the right ╭ (branch goes up-right)
     BranchRight(usize),
     /// Start branch to the left ╮ (branch goes up-left)
@@ -78,6 +80,25 @@ pub fn build_graph(
     uncommitted_count: Option<Option<usize>>,
     head_commit_oid: Option<Oid>,
 ) -> GraphLayout {
+    build_graph_with_options(
+        commits,
+        branches,
+        tags,
+        uncommitted_count,
+        head_commit_oid,
+        false,
+    )
+}
+
+/// Build a graph with optional conservative folding of uniquely-owned merged history.
+pub fn build_graph_with_options(
+    commits: &[CommitInfo],
+    branches: &[BranchInfo],
+    tags: &[TagInfo],
+    uncommitted_count: Option<Option<usize>>,
+    head_commit_oid: Option<Oid>,
+    compact_merged_history: bool,
+) -> GraphLayout {
     if commits.is_empty() {
         if let Some(count) = uncommitted_count {
             return GraphLayout {
@@ -101,6 +122,14 @@ pub fn build_graph(
             max_lane: 0,
         };
     }
+
+    let fold_plan = if compact_merged_history {
+        MergeFoldPlan::analyze(commits, branches)
+    } else {
+        MergeFoldPlan::default()
+    };
+    // Root merge OID -> (target lane, target color)
+    let mut fold_merge_visual: HashMap<Oid, (usize, usize)> = HashMap::new();
 
     // OID -> branch name mapping
     let mut oid_to_branches: HashMap<Oid, Vec<String>> = HashMap::new();
@@ -168,13 +197,24 @@ pub fn build_graph(
         // Start processing a new row
         color_assigner.advance_row();
 
-        // Find the lane tracking this commit OID
-        let commit_lane_opt = lanes
-            .iter()
-            .position(|l| l.map(|oid| oid == commit.oid).unwrap_or(false));
+        let fold_owner = fold_plan.owner_by_commit.get(&commit.oid).copied();
+        let fold_visual = fold_owner.and_then(|owner| fold_merge_visual.get(&owner).copied());
+        let is_folded_commit = fold_visual.is_some();
+
+        // Folded side-history commits render on the root merge target lane
+        // without consuming that lane's real first-parent tracking state.
+        let commit_lane_opt = if is_folded_commit {
+            None
+        } else {
+            lanes
+                .iter()
+                .position(|l| l.map(|oid| oid == commit.oid).unwrap_or(false))
+        };
 
         // Determine the lane
-        let lane = if let Some(l) = commit_lane_opt {
+        let lane = if let Some((fold_lane, _)) = fold_visual {
+            fold_lane
+        } else if let Some(l) = commit_lane_opt {
             l
         } else {
             // Find an empty lane or create one
@@ -196,7 +236,7 @@ pub fn build_graph(
             .map(|(i, _)| i)
             .collect();
 
-        if fork_lanes.len() >= 2 {
+        if !is_folded_commit && fork_lanes.len() >= 2 {
             // Use the smallest lane as main
             let main_lane = *fork_lanes.iter().min().unwrap();
             let merging_lanes: Vec<(usize, usize)> = fork_lanes
@@ -256,7 +296,9 @@ pub fn build_graph(
         }
 
         // Determine color index
-        let commit_color_index = if commit_lane_opt.is_some() {
+        let commit_color_index = if let Some((_, fold_color)) = fold_visual {
+            fold_color
+        } else if commit_lane_opt.is_some() {
             // Continue existing branch
             color_assigner.continue_lane(lane)
         } else if nodes.is_empty() {
@@ -270,20 +312,42 @@ pub fn build_graph(
         // Record lane color (to preserve colors during forks)
         lane_color_index.insert(lane, commit_color_index);
 
-        // Clear this commit lane
-        if lane < lanes.len() {
+        if fold_plan.foldable_merges.contains(&commit.oid) {
+            fold_merge_visual.insert(commit.oid, (lane, commit_color_index));
+        }
+
+        // A folded commit borrows the target lane visually; do not disturb
+        // the actual first-parent OID tracked by that lane.
+        if !is_folded_commit && lane < lanes.len() {
             lanes[lane] = None;
         }
 
         // Process parent commits
         // (OID, lane, already tracked?, color index, already shown?)
         let mut parent_lanes: Vec<(Oid, usize, bool, usize, bool)> = Vec::new();
-        let valid_parents: Vec<Oid> = commit
-            .parent_oids
-            .iter()
-            .filter(|oid| oid_to_row.contains_key(oid))
-            .copied()
-            .collect();
+        let valid_parents: Vec<Oid> = if is_folded_commit {
+            // Folded commits keep their real CommitInfo parents for detail/diff,
+            // but suppress graph edges so they do not reopen historical lanes.
+            Vec::new()
+        } else {
+            commit
+                .parent_oids
+                .iter()
+                .enumerate()
+                .filter_map(|(parent_idx, oid)| {
+                    if !oid_to_row.contains_key(oid) {
+                        return None;
+                    }
+                    // For a safe root merge, suppress only the side parent.
+                    if parent_idx > 0
+                        && fold_plan.owner_by_commit.get(oid) == Some(&commit.oid)
+                    {
+                        return None;
+                    }
+                    Some(*oid)
+                })
+                .collect()
+        };
 
         // Whether this is a fork sibling (parent is a fork point tracked on another lane)
         let mut is_fork_sibling = false;
@@ -384,7 +448,7 @@ pub fn build_graph(
 
         // Build cells for this row
         // Include ALL parents to draw connections directly on the commit row
-        let cells = build_row_cells_with_colors(
+        let mut cells = build_row_cells_with_colors(
             lane,
             final_color_index,
             &parent_lanes,
@@ -393,6 +457,12 @@ pub fn build_graph(
             &lane_color_index,
             max_lane,
         );
+        if is_folded_commit {
+            let commit_cell_idx = lane * 2;
+            if commit_cell_idx < cells.len() {
+                cells[commit_cell_idx] = CellType::FoldedCommit(final_color_index);
+            }
+        }
 
         let branch_names = oid_to_branches
             .get(&commit.oid)
@@ -817,5 +887,81 @@ mod tests {
         let layout = build_graph(&commits, &[], &[], None, None);
 
         assert!(layout.nodes[0].tag_names.is_empty());
+    }
+
+    fn graph_commit(id: char, parents: &[char]) -> CommitInfo {
+        let oid = Oid::from_str(&id.to_string().repeat(40)).unwrap();
+        let mut commit = make_commit(oid);
+        commit.message = id.to_string();
+        commit.full_message = id.to_string();
+        commit.parent_oids = parents
+            .iter()
+            .map(|parent| Oid::from_str(&parent.to_string().repeat(40)).unwrap())
+            .collect();
+        commit
+    }
+
+    fn graph_branch(name: &str, tip: char) -> BranchInfo {
+        BranchInfo {
+            name: name.to_string(),
+            is_head: name == "main",
+            is_remote: false,
+            upstream: None,
+            tip_oid: Oid::from_str(&tip.to_string().repeat(40)).unwrap(),
+        }
+    }
+
+    #[test]
+    fn compact_graph_folds_unique_side_history_into_target_lane() {
+        let commits = vec![
+            graph_commit('e', &['b', 'd']),
+            graph_commit('d', &['c']),
+            graph_commit('c', &['a']),
+            graph_commit('b', &['a']),
+            graph_commit('a', &[]),
+        ];
+        let branches = vec![graph_branch("main", 'e')];
+
+        let expanded = build_graph_with_options(&commits, &branches, &[], None, None, false);
+        let compact = build_graph_with_options(&commits, &branches, &[], None, None, true);
+
+        assert!(expanded.max_lane > compact.max_lane);
+        assert_eq!(compact.max_lane, 0);
+        for id in ['d', 'c'] {
+            let oid = Oid::from_str(&id.to_string().repeat(40)).unwrap();
+            let node = compact
+                .nodes
+                .iter()
+                .find(|node| node.commit.as_ref().map(|commit| commit.oid) == Some(oid))
+                .unwrap();
+            assert_eq!(node.lane, 0);
+            assert!(node
+                .cells
+                .iter()
+                .any(|cell| matches!(cell, CellType::FoldedCommit(_))));
+        }
+    }
+
+    #[test]
+    fn compact_graph_keeps_multi_target_history_expanded() {
+        let commits = vec![
+            graph_commit('e', &['b', 'd']),
+            graph_commit('f', &['g', 'd']),
+            graph_commit('d', &['c']),
+            graph_commit('c', &['a']),
+            graph_commit('b', &['a']),
+            graph_commit('g', &['a']),
+            graph_commit('a', &[]),
+        ];
+        let branches = vec![graph_branch("main", 'e'), graph_branch("release", 'f')];
+
+        let compact = build_graph_with_options(&commits, &branches, &[], None, None, true);
+
+        assert!(compact.max_lane > 0);
+        assert!(!compact.nodes.iter().any(|node| {
+            node.cells
+                .iter()
+                .any(|cell| matches!(cell, CellType::FoldedCommit(_)))
+        }));
     }
 }
