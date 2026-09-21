@@ -229,11 +229,11 @@ mod tests {
         // E(B, D) and F(G, D) both consume D/C.
         let commits = vec![
             commit('e', &['b', 'd']),
-            commit('f', &['g', 'd']),
+            commit('f', &['9', 'd']),
             commit('d', &['c']),
             commit('c', &['a']),
             commit('b', &['a']),
-            commit('g', &['a']),
+            commit('9', &['a']),
             commit('a', &[]),
         ];
         let branches = vec![branch("main", 'e'), branch("release", 'f')];
@@ -249,8 +249,8 @@ mod tests {
         // Outer E(B, D); inside side history D(C, H).
         let commits = vec![
             commit('e', &['b', 'd']),
-            commit('d', &['c', 'h']),
-            commit('h', &['a']),
+            commit('d', &['c', '9']),
+            commit('9', &['a']),
             commit('c', &['a']),
             commit('b', &['a']),
             commit('a', &[]),
@@ -260,7 +260,7 @@ mod tests {
 
         assert!(plan.foldable_merges.contains(&oid('e')));
         assert!(!plan.foldable_merges.contains(&oid('d')));
-        for id in ['d', 'c', 'h'] {
+        for id in ['d', 'c', '9'] {
             assert_eq!(plan.owner_by_commit.get(&oid(id)), Some(&oid('e')));
         }
     }
