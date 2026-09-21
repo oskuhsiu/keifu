@@ -44,6 +44,7 @@ fn render_cells(cells: &[CellType]) -> String {
             CellType::Empty => ' ',
             CellType::Pipe(_) => '│',
             CellType::Commit(_) => '○',
+            CellType::FoldedCommit(_) => '◇',
             CellType::BranchRight(_) => '╭',
             CellType::BranchLeft(_) => '╮',
             CellType::MergeRight(_) => '╰',
