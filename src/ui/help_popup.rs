@@ -89,6 +89,10 @@ fn help_lines() -> Vec<Line<'static>> {
             Span::styled("  t          ", key_style),
             Span::styled("Toggle tags", desc_style),
         ]),
+        Line::from(vec![
+            Span::styled("  z          ", key_style),
+            Span::styled("Toggle compact merged history (◇ = folded)", desc_style),
+        ]),
         Line::from(""),
         Line::from(Span::styled("Git Operations", header_style)),
         Line::from(vec![
