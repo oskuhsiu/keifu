@@ -92,6 +92,7 @@ See [docs/configuration.md](docs/configuration.md) for configuration options.
 | `g` / `Home` | Go to top |
 | `G` / `End` | Go to bottom |
 | `@` | Jump to HEAD (current branch) |
+| `z` | Toggle compact merged history (`◇` = folded commit) |
 | `Space` | Open file diff view |
 
 ### Git operations
@@ -187,6 +188,7 @@ in the Ghostty config works around it.
 - Checking out `origin/xxx` creates or updates a local branch. Upstream is set only when creating a new branch. If the local branch exists but points to a different commit, it is force-updated to match the remote.
 - Remote branches are displayed by default. Press `o` to hide them; when hidden, commits reachable only from remote branches are excluded from the graph.
 - Tags are displayed by default. Press `t` to hide them.
+- Compact merged history is enabled by default. Press `z` to show the full topology. It folds only uniquely-owned merged side history; ambiguous, live-branch, octopus, and truncated-history cases remain expanded.
 - Delete operations only work with local branches.
 - Fetch and push require the `origin` remote to be configured. Staging works per file (no hunk-level staging); commits include only staged changes, like plain `git commit`.
 

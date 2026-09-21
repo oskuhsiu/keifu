@@ -438,6 +438,7 @@ fn render_graph_line<'a>(
                 };
                 (ch, color)
             }
+            CellType::FoldedCommit(color_idx) => ('◇', get_color_by_index(*color_idx)),
             CellType::BranchRight(color_idx) => ('╭', get_color_by_index(*color_idx)),
             CellType::BranchLeft(color_idx) => ('╮', get_color_by_index(*color_idx)),
             CellType::MergeRight(color_idx) => ('╰', get_color_by_index(*color_idx)),

@@ -1,6 +1,7 @@
 //! Git layer
 
 pub mod branch;
+mod compact;
 pub mod commit;
 pub mod diff;
 pub mod extensions;
@@ -16,6 +17,6 @@ pub use diff::{
     FileDiffContent, FileDiffInfo,
 };
 pub use extensions::configure_git_extensions;
-pub use graph::build_graph;
+pub use graph::{build_graph, build_graph_with_options};
 pub use repository::{GitRepository, StageState, WorkingTreeStatus};
 pub use tag::TagInfo;

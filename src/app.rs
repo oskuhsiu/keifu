@@ -16,7 +16,7 @@ use crate::{
     action::Action,
     config::Config,
     git::{
-        build_graph,
+        build_graph_with_options,
         graph::GraphLayout,
         operations::{
             checkout_branch, checkout_commit, checkout_remote_branch, create_branch, create_commit,
@@ -337,12 +337,13 @@ impl App {
             .map(|s| s.accurate_file_count());
         let head_commit_oid = repo.head_oid();
         let tag_refs: &[TagInfo] = if show_tags { &tags } else { &[] };
-        let graph_layout = build_graph(
+        let graph_layout = build_graph_with_options(
             &commits,
             &branches,
             tag_refs,
             uncommitted_count,
             head_commit_oid,
+            config.graph.compact_merged_history,
         );
 
         let mut graph_list_state = ListState::default();
@@ -571,12 +572,13 @@ impl App {
         let head_commit_oid = self.repo.head_oid();
         let graph_started = Instant::now();
         let tag_refs: &[TagInfo] = if self.show_tags { &self.tags } else { &[] };
-        self.graph_layout = build_graph(
+        self.graph_layout = build_graph_with_options(
             &self.commits,
             &self.branches,
             tag_refs,
             uncommitted_count,
             head_commit_oid,
+            self.config.graph.compact_merged_history,
         );
         self.perf.record("refresh.graph", graph_started.elapsed());
         self.head_name = self.repo.head_name();
@@ -933,6 +935,11 @@ impl App {
         self.show_remote_branches
     }
 
+    /// Whether uniquely-owned merged history is folded into the target lane.
+    pub fn compact_merged_history(&self) -> bool {
+        self.config.graph.compact_merged_history
+    }
+
     /// Update diff info for the selected node (commit or uncommitted changes, async)
     pub fn update_diff_cache(&mut self) {
         // Pull in completed results for commit diff
@@ -1209,6 +1216,18 @@ impl App {
                 self.reset_timers();
                 let state = if self.show_tags { "shown" } else { "hidden" };
                 self.set_message(format!("Tags {state}"));
+            }
+            Action::ToggleCompactMergedHistory => {
+                self.config.graph.compact_merged_history =
+                    !self.config.graph.compact_merged_history;
+                self.refresh(false)?;
+                self.reset_timers();
+                let state = if self.config.graph.compact_merged_history {
+                    "on"
+                } else {
+                    "off"
+                };
+                self.set_message(format!("Compact merged history {state}"));
             }
             Action::Fetch if !self.is_fetching() => {
                 self.start_fetch(true, false); // silent=false for manual fetch
@@ -2213,12 +2232,13 @@ mod tests {
             .map(|s| s.accurate_file_count());
         let head_commit_oid = repo.head_oid();
         let tag_refs: &[TagInfo] = if show_tags { &tags } else { &[] };
-        let graph_layout = build_graph(
+        let graph_layout = build_graph_with_options(
             &commits,
             &branches,
             tag_refs,
             uncommitted_count,
             head_commit_oid,
+            Config::default().graph.compact_merged_history,
         );
 
         let mut graph_list_state = ListState::default();
@@ -2512,6 +2532,23 @@ mod tests {
         assert!(app.commits.iter().any(|commit| commit.oid == new_oid));
         assert!(app.graph_layout.nodes[0].is_uncommitted);
         assert!(app.graph_list_state.selected().unwrap() < app.graph_layout.nodes.len());
+    }
+
+    #[test]
+    fn toggle_compact_merged_history_updates_session_state() {
+        let (_tempdir, repo) = init_repo();
+        commit_file(&repo.repo, "tracked.txt", "tracked\n", "initial");
+
+        let mut app = make_app_from_repo(repo);
+        assert!(app.compact_merged_history());
+
+        app.handle_action(Action::ToggleCompactMergedHistory).unwrap();
+        assert!(!app.compact_merged_history());
+        assert_eq!(app.message.as_deref(), Some("Compact merged history off"));
+
+        app.handle_action(Action::ToggleCompactMergedHistory).unwrap();
+        assert!(app.compact_merged_history());
+        assert_eq!(app.message.as_deref(), Some("Compact merged history on"));
     }
 
     #[test]

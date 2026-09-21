@@ -21,6 +21,8 @@ pub struct GraphConfig {
     /// Show remote branches and commits only reachable from remote branches
     pub show_remote_branches: bool,
     pub show_tags: bool,
+    /// Fold uniquely-owned merged side history into its target lane.
+    pub compact_merged_history: bool,
 }
 
 impl Default for GraphConfig {
@@ -28,6 +30,7 @@ impl Default for GraphConfig {
         Self {
             show_remote_branches: true,
             show_tags: true,
+            compact_merged_history: true,
         }
     }
 }
@@ -210,5 +213,10 @@ mod tests {
         let selection = SelectionConfig::default();
         assert!(selection.auto_copy);
         assert!(selection.clear_after_copy);
+    }
+
+    #[test]
+    fn compact_merged_history_defaults_to_true() {
+        assert!(super::GraphConfig::default().compact_merged_history);
     }
 }

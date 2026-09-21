@@ -41,6 +41,7 @@ pub enum Action {
     Refresh,
     ToggleRemoteBranches,
     ToggleTags,
+    ToggleCompactMergedHistory,
     Quit,
 
     // Dialogs
