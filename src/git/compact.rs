@@ -128,9 +128,9 @@ impl MergeFoldPlan {
 /// Return target ancestors visible in the current history window. Reaching
 /// the window boundary is fine here; side-region traversal decides whether it
 /// rejoined this known target ancestry before that boundary.
-fn loaded_ancestors<'a>(
+fn loaded_ancestors(
     start: Oid,
-    commits: &HashMap<Oid, &'a CommitInfo>,
+    commits: &HashMap<Oid, &CommitInfo>,
 ) -> HashSet<Oid> {
     let mut seen = HashSet::new();
     let mut stack = vec![start];
@@ -156,10 +156,10 @@ fn loaded_ancestors<'a>(
 /// Collect side history until every path rejoins the known target ancestry.
 /// If any side path reaches outside the loaded window first, ownership is not
 /// provable and the caller must keep that merge expanded.
-fn side_region<'a>(
+fn side_region(
     start: Oid,
     target_ancestors: &HashSet<Oid>,
-    commits: &HashMap<Oid, &'a CommitInfo>,
+    commits: &HashMap<Oid, &CommitInfo>,
 ) -> Option<HashSet<Oid>> {
     let mut side = HashSet::new();
     let mut stack = vec![start];
