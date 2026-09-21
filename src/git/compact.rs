@@ -50,17 +50,15 @@ impl MergeFoldPlan {
                 continue;
             }
 
-            let Some(first_ancestors) = loaded_ancestors(first_parent, &commits_by_oid) else {
+            // The target ancestry only needs to be known as far back as
+            // the side history rejoins it. Older target history may fall
+            // outside the loaded window without making this merge ambiguous.
+            let first_ancestors = loaded_ancestors(first_parent, &commits_by_oid);
+            let Some(side_commits) =
+                side_region(side_parent, &first_ancestors, &commits_by_oid)
+            else {
                 continue;
             };
-            let Some(side_ancestors) = loaded_ancestors(side_parent, &commits_by_oid) else {
-                continue;
-            };
-
-            let side_commits: HashSet<Oid> = side_ancestors
-                .difference(&first_ancestors)
-                .copied()
-                .collect();
 
             if side_commits.is_empty() {
                 continue;
@@ -127,13 +125,13 @@ impl MergeFoldPlan {
     }
 }
 
-/// Return all ancestors reachable inside the currently loaded history window.
-/// If traversal reaches a parent outside the window, ownership cannot be
-/// proven complete, so return None and leave that region expanded.
+/// Return target ancestors visible in the current history window. Reaching
+/// the window boundary is fine here; side-region traversal decides whether it
+/// rejoined this known target ancestry before that boundary.
 fn loaded_ancestors<'a>(
     start: Oid,
     commits: &HashMap<Oid, &'a CommitInfo>,
-) -> Option<HashSet<Oid>> {
+) -> HashSet<Oid> {
     let mut seen = HashSet::new();
     let mut stack = vec![start];
 
@@ -142,8 +140,43 @@ fn loaded_ancestors<'a>(
             continue;
         }
 
+        let Some(commit) = commits.get(&oid) else {
+            continue;
+        };
+        for parent in &commit.parent_oids {
+            if commits.contains_key(parent) {
+                stack.push(*parent);
+            }
+        }
+    }
+
+    seen
+}
+
+/// Collect side history until every path rejoins the known target ancestry.
+/// If any side path reaches outside the loaded window first, ownership is not
+/// provable and the caller must keep that merge expanded.
+fn side_region<'a>(
+    start: Oid,
+    target_ancestors: &HashSet<Oid>,
+    commits: &HashMap<Oid, &'a CommitInfo>,
+) -> Option<HashSet<Oid>> {
+    let mut side = HashSet::new();
+    let mut stack = vec![start];
+
+    while let Some(oid) = stack.pop() {
+        if target_ancestors.contains(&oid) {
+            continue;
+        }
+        if !side.insert(oid) {
+            continue;
+        }
+
         let commit = commits.get(&oid)?;
         for parent in &commit.parent_oids {
+            if target_ancestors.contains(parent) {
+                continue;
+            }
             if !commits.contains_key(parent) {
                 return None;
             }
@@ -151,7 +184,7 @@ fn loaded_ancestors<'a>(
         }
     }
 
-    Some(seen)
+    Some(side)
 }
 
 #[cfg(test)]
@@ -263,6 +296,24 @@ mod tests {
         for id in ['d', 'c', '9'] {
             assert_eq!(plan.owner_by_commit.get(&oid(id)), Some(&oid('e')));
         }
+    }
+
+    #[test]
+    fn older_history_may_be_truncated_after_side_rejoins_target() {
+        // Both sides rejoin at A; A's older parent is outside the window.
+        let commits = vec![
+            commit('e', &['b', 'd']),
+            commit('d', &['c']),
+            commit('c', &['a']),
+            commit('b', &['a']),
+            commit('a', &['9']),
+        ];
+
+        let plan = MergeFoldPlan::analyze(&commits, &[branch("main", 'e')]);
+
+        assert!(plan.foldable_merges.contains(&oid('e')));
+        assert_eq!(plan.owner_by_commit.get(&oid('d')), Some(&oid('e')));
+        assert_eq!(plan.owner_by_commit.get(&oid('c')), Some(&oid('e')));
     }
 
     #[test]
