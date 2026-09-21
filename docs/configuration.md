@@ -44,6 +44,20 @@ show_tags = false
 
 Press `t` in the TUI to toggle tags for the current session.
 
+By default, keifu compacts merged side history when it can prove that the history
+has one unambiguous external merge target. Folded commits remain visible and use
+a `◇` marker on the target lane. Keifu keeps the full topology when the side
+history still has a live branch ref, is merged into multiple external targets,
+uses an octopus merge, or reaches beyond the loaded history window.
+
+```toml
+[graph]
+# Fold safely-owned merged history into the target lane (default: true)
+compact_merged_history = true
+```
+
+Press `z` in the TUI to toggle compact merged history for the current session.
+
 ## Layout
 
 The graph, commit detail, and changed-files panes can be arranged vertically or
@@ -112,6 +126,7 @@ If automatic copy fails, the selection is kept even when `clear_after_copy = tru
 | `refresh.fetch_interval` | integer | `60` | Interval in seconds for remote fetch (minimum: 10) |
 | `graph.show_remote_branches` | bool | `true` | Show remote branches and commits reachable only from remote branches |
 | `graph.show_tags` | bool | `true` | Show tag labels on commits |
+| `graph.compact_merged_history` | bool | `true` | Fold uniquely-owned merged side history into its target lane |
 | `layout.direction` | `vertical` / `horizontal` | `vertical` | Direction of the graph / commit / files pane split |
 | `layout.graph` | integer | `50` | Percentage of the main content area used by the graph pane |
 | `layout.commit` | integer | `25` | Percentage of the main content area used by commit detail |
