@@ -127,8 +127,7 @@ fn selected_graph_context(app: &App) -> String {
 pub fn draw(frame: &mut Frame, app: &mut App, layout_config: &LayoutConfig) {
     selection::begin_frame();
 
-    // Update the diff cache once before rendering
-    app.update_diff_cache();
+    // Background diff results are polled by App::tick, independently of drawing.
 
     let area = frame.area();
 

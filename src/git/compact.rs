@@ -198,10 +198,10 @@ mod tests {
     }
 
     fn commit(id: char, parents: &[char]) -> CommitInfo {
-        let oid = oid(id);
+        let commit_oid = oid(id);
         CommitInfo {
-            oid,
-            short_id: oid.to_string()[..7].to_string(),
+            oid: commit_oid,
+            short_id: commit_oid.to_string()[..7].to_string(),
             author_name: "Test".to_string(),
             author_email: "test@example.com".to_string(),
             timestamp: Local::now(),

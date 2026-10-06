@@ -103,7 +103,12 @@ impl EventReader {
     }
 
     pub fn poll_events(&mut self) -> Result<EventBatch> {
-        let first = match self.receiver.recv_timeout(EVENT_POLL_TIMEOUT) {
+        self.poll_events_with_timeout(EVENT_POLL_TIMEOUT)
+    }
+
+    /// Wait at most `timeout`; real input wakes the channel immediately.
+    pub fn poll_events_with_timeout(&mut self, timeout: Duration) -> Result<EventBatch> {
+        let first = match self.receiver.recv_timeout(timeout) {
             Ok(message) => message,
             Err(RecvTimeoutError::Timeout) => {
                 return Ok(EventBatch {
@@ -473,5 +478,45 @@ mod tests {
             receiver.recv_timeout(Duration::from_secs(1)),
             Ok(InputMessage::Event(Event::Key(_)))
         ));
+    }
+
+
+    #[test]
+    fn idle_timeout_returns_an_empty_batch() {
+        let (_sender, receiver) = mpsc::sync_channel(1);
+        let mut reader = EventReader {
+            receiver,
+            raw_count: Arc::new(AtomicUsize::new(0)),
+        };
+        let batch = reader.poll_events_with_timeout(Duration::ZERO).unwrap();
+        assert!(!batch.had_input());
+        assert!(batch.into_events().is_empty());
+    }
+
+    #[test]
+    fn queued_input_wakes_a_long_idle_wait_immediately() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.send(InputMessage::Event(Event::Key(
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        ))).unwrap();
+        let mut reader = EventReader {
+            receiver,
+            raw_count: Arc::new(AtomicUsize::new(1)),
+        };
+        let batch = reader.poll_events_with_timeout(Duration::from_secs(60)).unwrap();
+        assert!(batch.had_input());
+        assert_eq!(batch.retained_count(), 1);
+        assert!(matches!(batch.into_events().as_slice(), [InputEvent::Terminal(Event::Key(_))]));
+    }
+
+    #[test]
+    fn disconnected_input_returns_an_error_instead_of_spinning() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        drop(sender);
+        let mut reader = EventReader {
+            receiver,
+            raw_count: Arc::new(AtomicUsize::new(0)),
+        };
+        assert!(reader.poll_events_with_timeout(Duration::ZERO).is_err());
     }
 }
