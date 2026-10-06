@@ -268,6 +268,7 @@ pub struct App {
     selected_diff_target_changed_at: Instant,
 
     // Flags
+    ui_dirty: bool,
     pub should_quit: bool,
     pending_refresh: bool,
     /// Viewport height for diff scroll calculations (updated during render)
@@ -317,7 +318,11 @@ impl App {
 
     /// Create a new application
     pub fn new() -> Result<Self> {
-        let config = Config::load();
+        Self::with_config(Config::load())
+    }
+
+    /// Create an application using the same configuration as the event loop.
+    pub fn with_config(config: Config) -> Result<Self> {
         let now = Instant::now();
 
         let repo = GitRepository::discover()?;
@@ -403,6 +408,7 @@ impl App {
             uncommitted_cache_key: None,
             selected_diff_target: None,
             selected_diff_target_changed_at: now,
+            ui_dirty: true,
             should_quit: false,
             pending_refresh: false,
             diff_viewport_height: 40,
@@ -417,6 +423,59 @@ impl App {
             last_fetch_time: now,
         };
         Ok(app)
+    }
+
+    /// Mark visible state as changed. Multiple changes coalesce into one draw.
+    pub fn request_redraw(&mut self) {
+        self.ui_dirty = true;
+    }
+
+    /// Consume the pending redraw request. Idle ticks leave this false.
+    pub fn take_redraw_request(&mut self) -> bool {
+        std::mem::take(&mut self.ui_dirty)
+    }
+
+    pub fn layout_config(&self) -> &crate::config::LayoutConfig {
+        &self.config.layout
+    }
+
+    /// Poll background results independently of rendering. This must run even
+    /// when no key was pressed and the terminal does not need a new frame.
+    pub fn tick(&mut self, allow_repository_refresh: bool) {
+        self.update_fetch_status(allow_repository_refresh);
+        self.update_push_status(allow_repository_refresh);
+        if allow_repository_refresh {
+            self.check_auto_refresh();
+        }
+        self.update_diff_cache();
+        self.expire_message();
+    }
+
+    fn expire_message(&mut self) {
+        if !self.is_fetching()
+            && !self.is_pushing()
+            && self.message.is_some()
+            && self.get_message().is_none()
+        {
+            self.message = None;
+            self.message_time = None;
+            self.request_redraw();
+        }
+    }
+
+    /// Input wakes recv_timeout immediately; the longer idle timeout only
+    /// reduces background wakeups. In-flight jobs retain 100 ms responsiveness.
+    pub fn poll_timeout(&self) -> Duration {
+        if self.has_in_flight_diff()
+            || self.is_diff_loading()
+            || self.is_fetching()
+            || self.is_pushing()
+            || (self.pending_refresh && !self.repository_refresh_is_paused())
+        {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_secs(1)
+        }
     }
 
     /// Clear all diff caches
@@ -492,6 +551,7 @@ impl App {
             self.selected_diff_target = target;
             self.selected_diff_target_changed_at = Instant::now();
             self.detail_scroll = 0;
+            self.request_redraw();
         }
         target
     }
@@ -671,6 +731,7 @@ impl App {
         self.perf.record("refresh", refresh_started.elapsed());
         self.pending_refresh = false;
         self.last_refresh_time = Instant::now();
+        self.request_redraw();
 
         Ok(())
     }
@@ -756,13 +817,21 @@ impl App {
         let Some(rx) = &self.fetch_receiver else {
             return;
         };
-        let Ok(fetch_result) = rx.try_recv() else {
-            return;
+        let fetch_result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("Fetch worker disconnected before returning a result".to_string())
+            }
         };
 
         let silent = self.fetch_silent;
         self.fetch_receiver = None;
         self.fetch_silent = false;
+        // Schedule from completion on BOTH success and failure. A failed fetch
+        // must not leave an already-expired timer and respawn on every tick.
+        self.last_fetch_time = Instant::now();
+        self.request_redraw();
 
         match fetch_result {
             Ok(()) => {
@@ -778,7 +847,10 @@ impl App {
                 }
             }
             Err(e) if !silent => self.show_error(e),
-            Err(_) => {} // Silent mode: suppress error dialog for auto-fetch
+            Err(e) => {
+                tracing::warn!(error = %e, "automatic fetch failed; waiting for next interval");
+                self.set_message(format!("Auto-fetch failed: {e}; press f to retry"));
+            }
         }
     }
 
@@ -797,10 +869,15 @@ impl App {
         let Some(rx) = &self.push_receiver else {
             return;
         };
-        let Ok(result) = rx.try_recv() else {
-            return;
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("Push worker disconnected before returning a result".to_string())
+            }
         };
         self.push_receiver = None;
+        self.request_redraw();
 
         match result {
             Ok(()) => {
@@ -868,16 +945,16 @@ impl App {
     }
 
     fn repository_refresh_is_paused(&self) -> bool {
-        matches!(
-            self.mode,
-            AppMode::FileSelect { .. } | AppMode::FileDiff { .. }
-        )
+        // Do not rebuild the graph behind file views or modal dialogs.
+        !matches!(self.mode, AppMode::Normal)
     }
 
     /// Start fetch in background
     /// If `show_message` is true, displays "Fetching from origin..."
     /// If `silent` is true, errors will not show a dialog (for auto-fetch)
     fn start_fetch(&mut self, show_message: bool, silent: bool) {
+        self.last_fetch_time = Instant::now();
+        self.request_redraw();
         let (tx, rx) = mpsc::channel();
         let repo_path = self.repo_path.clone();
 
@@ -904,6 +981,7 @@ impl App {
     pub fn set_message(&mut self, msg: impl Into<String>) {
         self.message = Some(msg.into());
         self.message_time = Some(std::time::Instant::now());
+        self.request_redraw();
     }
 
     /// Get current message if not expired (5 seconds timeout)
@@ -946,6 +1024,7 @@ impl App {
         if let Some(ref receiver) = self.diff_receiver {
             match receiver.try_recv() {
                 Ok(result) => {
+                    self.request_redraw();
                     match result.diff {
                         Ok(diff) => {
                             self.diff_cache = Some(diff);
@@ -961,7 +1040,10 @@ impl App {
                     self.diff_receiver = None;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    // Thread panicked or dropped sender — clear loading state
+                    // Cache this failed target as well; a disconnected worker
+                    // must not be respawned on every idle tick.
+                    self.diff_cache = None;
+                    self.diff_cache_oid = self.diff_loading_oid;
                     self.diff_loading_oid = None;
                     self.diff_receiver = None;
                     self.set_message("Diff computation failed unexpectedly");
@@ -974,6 +1056,7 @@ impl App {
         if let Some(ref receiver) = self.uncommitted_diff_receiver {
             match receiver.try_recv() {
                 Ok((result, status)) => {
+                    self.request_redraw();
                     match result {
                         Ok(diff) => {
                             tracing::debug!(files = diff.files.len(), "uncommitted diff loaded");
@@ -1050,6 +1133,7 @@ impl App {
                 self.uncommitted_diff_failed = false;
                 self.uncommitted_diff_loading = true;
                 self.uncommitted_diff_receiver = Some(rx);
+                self.request_redraw();
 
                 thread::spawn(move || {
                     let repo = GitRepository {
@@ -1081,6 +1165,7 @@ impl App {
 
                 self.diff_loading_oid = Some(oid);
                 self.diff_receiver = Some(rx);
+                self.request_redraw();
 
                 thread::spawn(move || {
                     let diff = git2::Repository::open(&repo_path)
@@ -1118,6 +1203,7 @@ impl App {
 
     /// Handle an action
     pub fn handle_action(&mut self, action: Action) -> Result<()> {
+        self.request_redraw();
         match &self.mode {
             AppMode::Normal => self.handle_normal_action(action)?,
             AppMode::Help => self.handle_help_action(action),
@@ -1134,6 +1220,7 @@ impl App {
     pub fn show_error(&mut self, message: String) {
         tracing::warn!(%message, "showing error");
         self.mode = AppMode::Error { message };
+        self.request_redraw();
     }
 
     fn handle_normal_action(&mut self, action: Action) -> Result<()> {
@@ -1735,7 +1822,7 @@ impl App {
                         }
                     }
                     InputAction::Search => {
-                        // Jump to selected result and exit search mode
+                        // Jump to selected result and exit search
                         self.jump_to_search_result();
                     }
                     InputAction::CommitMessage => {
@@ -2293,6 +2380,7 @@ mod tests {
             uncommitted_cache_key: None,
             selected_diff_target: None,
             selected_diff_target_changed_at: now,
+            ui_dirty: true,
             should_quit: false,
             pending_refresh: false,
             diff_viewport_height: 40,
@@ -2373,6 +2461,7 @@ mod tests {
             uncommitted_cache_key: None,
             selected_diff_target: Some(diff_target),
             selected_diff_target_changed_at: Instant::now() - DIFF_LOAD_DEBOUNCE,
+            ui_dirty: true,
             should_quit: false,
             pending_refresh: false,
             diff_viewport_height: 40,
@@ -2669,6 +2758,7 @@ mod tests {
         app.sync_branch_selection_to_node(first_node_idx);
 
         fs::write(tempdir.path().join("untracked.txt"), "hello\n").unwrap();
+
         app.refresh(false).unwrap();
 
         let selected_oid = app
@@ -2774,5 +2864,204 @@ mod tests {
                 .count,
             refresh_count
         );
+    }
+
+
+    // These tests exercise background maintenance without drawing or spawning
+    // Git workers. Async completions are injected through the real channels.
+    fn idle_test_app() -> App {
+        let oid = Oid::from_str("1111111111111111111111111111111111111111").unwrap();
+        let mut app = make_app(oid, None);
+        app.diff_cache = Some(CommitDiffInfo::default());
+        app.diff_cache_oid = Some(oid);
+        app.config.refresh.auto_refresh = false;
+        app.config.refresh.auto_fetch = false;
+        app
+    }
+
+    #[test]
+    fn idle_ticks_do_not_request_new_frames() {
+        let mut app = idle_test_app();
+        assert!(app.take_redraw_request());
+        for _ in 0..600 {
+            app.tick(true);
+            assert!(!app.take_redraw_request());
+        }
+        assert_eq!(app.poll_timeout(), Duration::from_secs(1));
+        assert!(app.perf.ops().all(|(name, _)| name != "refresh"));
+    }
+
+    #[test]
+    fn background_diff_completion_requests_one_frame_without_input() {
+        let mut app = idle_test_app();
+        let oid = app.diff_cache_oid.take().unwrap();
+        app.diff_cache = None;
+        app.diff_loading_oid = Some(oid);
+        let (sender, receiver) = mpsc::channel();
+        app.diff_receiver = Some(receiver);
+        app.take_redraw_request();
+
+        // Waiting for a worker is not itself a reason to repaint repeatedly.
+        app.tick(false);
+        assert!(!app.take_redraw_request());
+        assert_eq!(app.poll_timeout(), Duration::from_millis(100));
+
+        sender.send(DiffResult { oid, diff: Ok(CommitDiffInfo::default()) }).unwrap();
+        app.tick(false);
+        assert!(app.cached_diff().is_some());
+        assert!(app.take_redraw_request());
+        app.tick(false);
+        assert!(!app.take_redraw_request());
+        assert_eq!(app.poll_timeout(), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn uncommitted_diff_completion_requests_redraw_without_input() {
+        let mut app = make_uncommitted_app();
+        let (sender, receiver) = mpsc::channel();
+        app.uncommitted_diff_loading = true;
+        app.uncommitted_diff_receiver = Some(receiver);
+        sender.send((Ok(CommitDiffInfo::default()), app.working_tree_status.clone())).unwrap();
+        app.take_redraw_request();
+        app.tick(false);
+        assert!(app.cached_diff().is_some());
+        assert!(app.take_redraw_request());
+        app.tick(false);
+        assert!(!app.take_redraw_request());
+    }
+
+    #[test]
+    fn message_expiration_requests_exactly_one_redraw() {
+        let mut app = idle_test_app();
+        app.set_message("Copied selection");
+        app.message_time = Some(Instant::now() - Duration::from_secs(6));
+        app.take_redraw_request();
+        app.tick(false);
+        assert!(app.message.is_none());
+        assert!(app.take_redraw_request());
+        app.tick(false);
+        assert!(!app.take_redraw_request());
+    }
+
+    #[test]
+    fn pending_network_operation_keeps_its_message() {
+        let mut app = idle_test_app();
+        let (_sender, receiver) = mpsc::channel();
+        app.fetch_receiver = Some(receiver);
+        app.set_message("Fetching from origin...");
+        app.message_time = Some(Instant::now() - Duration::from_secs(6));
+        app.take_redraw_request();
+        app.tick(false);
+        assert_eq!(app.get_message(), Some("Fetching from origin..."));
+        assert!(!app.take_redraw_request());
+    }
+
+    #[test]
+    fn failed_auto_fetch_waits_a_full_interval_before_retry() {
+        let mut app = idle_test_app();
+        app.config.refresh.auto_fetch = true;
+        app.config.refresh.fetch_interval = 3600;
+        app.last_fetch_time = Instant::now() - Duration::from_secs(7200);
+        app.fetch_silent = true;
+        let (sender, receiver) = mpsc::channel();
+        app.fetch_receiver = Some(receiver);
+        sender.send(Err("offline".to_string())).unwrap();
+        let before_completion = Instant::now();
+        app.take_redraw_request();
+        app.tick(true);
+        assert!(app.last_fetch_time >= before_completion);
+        assert!(!app.is_fetching());
+        assert!(!app.pending_refresh);
+        assert!(matches!(app.mode, AppMode::Normal));
+        assert!(app.take_redraw_request());
+        for _ in 0..20 {
+            app.tick(true);
+            assert!(!app.is_fetching());
+            assert!(!app.take_redraw_request());
+        }
+    }
+
+    #[test]
+    fn disconnected_fetch_worker_also_respects_retry_interval() {
+        let mut app = idle_test_app();
+        app.config.refresh.auto_fetch = true;
+        app.last_fetch_time = Instant::now() - Duration::from_secs(7200);
+        app.fetch_silent = true;
+        let (sender, receiver) = mpsc::channel();
+        app.fetch_receiver = Some(receiver);
+        drop(sender);
+        let before_completion = Instant::now();
+        app.tick(true);
+        assert!(!app.is_fetching());
+        assert!(app.last_fetch_time >= before_completion);
+        app.tick(true);
+        assert!(!app.is_fetching());
+    }
+
+    #[test]
+    fn manual_fetch_failure_is_still_reported() {
+        let mut app = idle_test_app();
+        let (sender, receiver) = mpsc::channel();
+        app.fetch_receiver = Some(receiver);
+        app.fetch_silent = false;
+        sender.send(Err("no origin".to_string())).unwrap();
+        app.tick(false);
+        assert!(!app.is_fetching());
+        assert!(matches!(&app.mode, AppMode::Error { message } if message == "no origin"));
+    }
+
+    #[test]
+    fn manual_fetch_default_never_starts_due_to_elapsed_time() {
+        let mut app = idle_test_app();
+        assert!(!Config::default().refresh.auto_fetch);
+        app.last_fetch_time = Instant::now() - Duration::from_secs(7200);
+        app.tick(true);
+        assert!(!app.is_fetching());
+    }
+
+    #[test]
+    fn disconnected_diff_worker_is_not_restarted_on_idle_ticks() {
+        let mut app = idle_test_app();
+        let oid = app.diff_cache_oid.take().unwrap();
+        app.diff_cache = None;
+        app.diff_loading_oid = Some(oid);
+        let (sender, receiver) = mpsc::channel();
+        app.diff_receiver = Some(receiver);
+        drop(sender);
+        app.tick(false);
+        assert_eq!(app.diff_cache_oid, Some(oid));
+        assert!(app.diff_receiver.is_none());
+        app.take_redraw_request();
+        app.tick(false);
+        assert!(app.diff_receiver.is_none());
+        assert!(!app.take_redraw_request());
+    }
+
+    #[test]
+    fn help_defers_overdue_repository_refresh() {
+        let mut app = idle_test_app();
+        app.config.refresh.auto_refresh = true;
+        app.last_refresh_time = Instant::now() - Duration::from_secs(600);
+        app.mode = AppMode::Help;
+        app.take_redraw_request();
+        app.tick(true);
+        assert!(!app.take_redraw_request());
+        assert!(app.perf.ops().all(|(name, _)| name != "refresh"));
+    }
+
+    #[test]
+    fn rendering_does_not_start_background_diff_work() {
+        let mut app = idle_test_app();
+        app.diff_cache = None;
+        app.diff_cache_oid = None;
+        app.take_redraw_request();
+        let layout = app.layout_config().clone();
+        let mut terminal = ratatui::Terminal::new(
+            ratatui::backend::TestBackend::new(120, 40),
+        ).unwrap();
+        terminal.draw(|frame| crate::ui::draw(frame, &mut app, &layout)).unwrap();
+        assert!(app.diff_receiver.is_none());
+        assert!(app.diff_loading_oid.is_none());
+        assert!(!app.take_redraw_request());
     }
 }

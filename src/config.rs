@@ -75,8 +75,7 @@ impl LayoutConfig {
     /// percentage is considered invalid because hiding panes is not part of
     /// the layout configuration contract.
     pub fn percentages(&self) -> [u16; 3] {
-        let total =
-            u32::from(self.graph) + u32::from(self.commit) + u32::from(self.files);
+        let total = u32::from(self.graph) + u32::from(self.commit) + u32::from(self.files);
         if self.graph > 0 && self.commit > 0 && self.files > 0 && total == 100 {
             [self.graph, self.commit, self.files]
         } else {
@@ -111,12 +110,12 @@ impl Default for SelectionConfig {
 pub struct RefreshConfig {
     /// Enable auto-refresh for local state (commits, branches, working tree)
     pub auto_refresh: bool,
-    /// Interval in seconds for local refresh (minimum: 1, default: 10)
+    /// Interval in seconds for local refresh (minimum: 1, default: 300)
     #[serde(deserialize_with = "deserialize_refresh_interval")]
     pub refresh_interval: u64,
-    /// Enable auto-fetch from remote
+    /// Enable automatic remote fetch (default: false; use f to fetch manually)
     pub auto_fetch: bool,
-    /// Interval in seconds for remote fetch (minimum: 10, default: 60)
+    /// Interval in seconds when auto-fetch is enabled (minimum: 10, default: 3600)
     #[serde(deserialize_with = "deserialize_fetch_interval")]
     pub fetch_interval: u64,
 }
@@ -125,9 +124,9 @@ impl Default for RefreshConfig {
     fn default() -> Self {
         Self {
             auto_refresh: true,
-            refresh_interval: 10,
-            auto_fetch: true,
-            fetch_interval: 60,
+            refresh_interval: 300,
+            auto_fetch: false,
+            fetch_interval: 3600,
         }
     }
 }
@@ -149,21 +148,28 @@ where
 }
 
 impl Config {
-    /// Load config from ~/.config/keifu/config.toml
-    /// Returns default config if file doesn't exist or is invalid
+    /// Load from the OS configuration directory. On macOS this is
+    /// ~/Library/Application Support/keifu/config.toml, NOT ~/.config/keifu.
+    /// Missing files use defaults; unreadable/invalid files also emit a warning.
     pub fn load() -> Self {
-        let path = dirs::config_dir()
-            .map(|p| p.join("keifu/config.toml"))
-            .filter(|p| p.exists());
-
-        let Some(path) = path else {
+        let Some(path) = dirs::config_dir().map(|p| p.join("keifu/config.toml")) else {
             return Self::default();
         };
-
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|content| toml::from_str(&content).ok())
-            .unwrap_or_default()
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(error) => {
+                eprintln!("keifu: cannot read {}: {error}; using defaults", path.display());
+                return Self::default();
+            }
+        };
+        match toml::from_str(&content) {
+            Ok(config) => config,
+            Err(error) => {
+                eprintln!("keifu: invalid config {}: {error}; using defaults", path.display());
+                Self::default()
+            }
+        }
     }
 }
 
@@ -218,5 +224,36 @@ mod tests {
     #[test]
     fn compact_merged_history_defaults_to_true() {
         assert!(super::GraphConfig::default().compact_merged_history);
+    }
+
+    #[test]
+    fn refresh_defaults_are_local_five_minutes_and_manual_fetch() {
+        for text in ["", "[refresh]\n", "[refresh]\nauto_refresh = true\n"] {
+            let config: super::Config = toml::from_str(text).unwrap();
+            assert!(config.refresh.auto_refresh);
+            assert_eq!(config.refresh.refresh_interval, 300);
+            assert!(!config.refresh.auto_fetch);
+            assert_eq!(config.refresh.fetch_interval, 3600);
+        }
+    }
+
+    #[test]
+    fn explicit_refresh_and_fetch_settings_are_preserved() {
+        let config: super::Config = toml::from_str(
+            "[refresh]\nauto_refresh = false\nrefresh_interval = 30\nauto_fetch = true\nfetch_interval = 120\n",
+        ).unwrap();
+        assert!(!config.refresh.auto_refresh);
+        assert_eq!(config.refresh.refresh_interval, 30);
+        assert!(config.refresh.auto_fetch);
+        assert_eq!(config.refresh.fetch_interval, 120);
+    }
+
+    #[test]
+    fn zero_intervals_still_use_the_existing_minimums() {
+        let config: super::Config = toml::from_str(
+            "[refresh]\nrefresh_interval = 0\nfetch_interval = 0\n",
+        ).unwrap();
+        assert_eq!(config.refresh.refresh_interval, 1);
+        assert_eq!(config.refresh.fetch_interval, 10);
     }
 }

@@ -1,25 +1,63 @@
 # Configuration
 
-keifu can be configured via `~/.config/keifu/config.toml`. All settings are optional.
+All settings are optional. Keifu reads `keifu/config.toml` under the native OS
+configuration directory:
+
+| OS | File |
+| --- | --- |
+| macOS | `~/Library/Application Support/keifu/config.toml` |
+| Linux | `$XDG_CONFIG_HOME/keifu/config.toml`, or `~/.config/keifu/config.toml` when unset |
+| Windows | `%APPDATA%\keifu\config.toml` |
+
+On macOS, `~/.config/keifu/config.toml` is **not** read. Create the native directory
+and file manually when needed. Restart Keifu after editing. Missing files use
+defaults; unreadable or invalid files print a warning with the path and then use
+defaults. Existing explicit settings always override defaults and are never
+rewritten by an upgrade.
 
 ## Auto-refresh
 
-By default, keifu automatically refreshes the commit graph every 10 seconds and fetches from origin every 60 seconds.
+By default, Keifu refreshes local Git state every **300 seconds (5 minutes)**.
+Remote fetch is **manual by default**: press `f` in Normal mode to fetch `origin`.
+Press `R` to refresh local data immediately; it does not contact the remote.
 
 ```toml
 [refresh]
-# Enable auto-refresh for local state (default: true)
+# Refresh commits, branches, and working-tree state locally.
 auto_refresh = true
 
-# Interval in seconds for local refresh (default: 10, minimum: 1)
-refresh_interval = 10
+# Seconds between local refreshes (default: 300, minimum: 1).
+refresh_interval = 300
 
-# Enable auto-fetch from origin (default: true)
-auto_fetch = true
+# Do not contact origin automatically (default: false).
+auto_fetch = false
 
-# Interval in seconds for remote fetch (default: 60, minimum: 10)
-fetch_interval = 60
+# Used ONLY when auto_fetch = true (default: 3600, minimum: 10).
+fetch_interval = 3600
 ```
+
+To opt into automatic hourly fetch, set `auto_fetch = true`. A completed fetch
+updates the retry clock whether it succeeds or fails; failures wait for the
+configured interval rather than immediately starting another process. Manual
+`f` can retry immediately, provided no fetch is already running.
+
+Repository refresh is deferred while viewing files/diffs, help, or dialogs, and
+while recent input is being handled. These intervals are therefore minimum
+spacing, not strict wall-clock appointments. Successful Git operations can also
+request a local refresh.
+
+If an older config explicitly contains `refresh_interval = 10` or
+`auto_fetch = true`, remove or change those values to adopt the new defaults.
+Merge these fields into an existing `[refresh]` table instead of adding a second
+table with the same name.
+
+### Idle rendering
+
+Git refresh and terminal rendering are separate. Idle polling does not rebuild
+the UI: input, resize, background results, message expiration, and clipboard
+selection clearing request redraws. Normal mode also repaints relative dates
+once per minute without reading Git or contacting the network. Background diff
+results continue to be received even when no frame is drawn.
 
 ## Graph display
 
@@ -121,9 +159,9 @@ If automatic copy fails, the selection is kept even when `clear_after_copy = tru
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `refresh.auto_refresh` | bool | `true` | Enable auto-refresh for local state (commits, branches, working tree) |
-| `refresh.refresh_interval` | integer | `10` | Interval in seconds for local refresh (minimum: 1) |
-| `refresh.auto_fetch` | bool | `true` | Enable auto-fetch from origin |
-| `refresh.fetch_interval` | integer | `60` | Interval in seconds for remote fetch (minimum: 10) |
+| `refresh.refresh_interval` | integer | `300` | Interval in seconds for local refresh (minimum: 1) |
+| `refresh.auto_fetch` | bool | `false` | Opt into automatic fetch from origin; otherwise use `f` |
+| `refresh.fetch_interval` | integer | `3600` | Interval in seconds when auto-fetch is enabled (minimum: 10) |
 | `graph.show_remote_branches` | bool | `true` | Show remote branches and commits reachable only from remote branches |
 | `graph.show_tags` | bool | `true` | Show tag labels on commits |
 | `graph.compact_merged_history` | bool | `true` | Fold uniquely-owned merged side history into its target lane |
@@ -136,7 +174,7 @@ If automatic copy fails, the selection is kept even when `clear_after_copy = tru
 
 ### Disabling auto-refresh
 
-To disable automatic updates entirely:
+To disable automatic repository updates entirely:
 
 ```toml
 [refresh]
