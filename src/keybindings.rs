@@ -1,16 +1,23 @@
 //! Keybindings
 
-#[cfg(windows)]
-use crossterm::event::KeyEventKind;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::action::Action;
 use crate::app::AppMode;
 
 pub fn map_key_to_action(key: KeyEvent, mode: &AppMode) -> Option<Action> {
+    // Releases must not trigger a second action, including a second quit.
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
     #[cfg(windows)]
     if key.kind != KeyEventKind::Press {
         return None;
+    }
+    // An explicit application exit takes priority over modal text input.
+    // Raw-mode terminals deliver Ctrl+C as a key, not a process signal.
+    if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
+        return Some(Action::Quit);
     }
     match mode {
         AppMode::Normal => map_normal_mode(key),
@@ -96,9 +103,8 @@ fn map_normal_mode(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::Char('t')) => Some(Action::ToggleTags),
         (KeyModifiers::NONE, KeyCode::Char('z')) => Some(Action::ToggleCompactMergedHistory),
         (_, KeyCode::Char('?')) => Some(Action::ToggleHelp),
-        (KeyModifiers::NONE, KeyCode::Char('q')) | (KeyModifiers::NONE, KeyCode::Esc) => {
-            Some(Action::Quit)
-        }
+        (KeyModifiers::NONE, KeyCode::Char('q')) => Some(Action::Quit),
+        (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
 
         _ => None,
     }
@@ -236,5 +242,62 @@ fn map_file_diff_mode(key: KeyEvent) -> Option<Action> {
             Some(Action::Cancel)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::InputAction;
+
+    #[test]
+    fn escape_in_normal_mode_cancels_instead_of_quitting() {
+        assert_eq!(
+            map_key_to_action(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &AppMode::Normal),
+            Some(Action::Cancel)
+        );
+    }
+
+    #[test]
+    fn ctrl_c_is_explicit_quit_and_plain_c_still_opens_commit_dialog() {
+        assert_eq!(
+            map_key_to_action(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                &AppMode::Normal,
+            ),
+            Some(Action::Quit)
+        );
+        assert_eq!(
+            map_key_to_action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE), &AppMode::Normal),
+            Some(Action::CommitDialog)
+        );
+    }
+
+    #[test]
+    fn ctrl_c_is_not_inserted_as_text_in_input_dialogs() {
+        for action in [InputAction::Search, InputAction::CreateBranch, InputAction::CommitMessage] {
+            let mode = AppMode::Input { title: String::new(), input: String::new(), action };
+            assert_eq!(
+                map_key_to_action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL), &mode),
+                Some(Action::Quit)
+            );
+            assert_eq!(
+                map_key_to_action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE), &mode),
+                Some(Action::InputChar('c'))
+            );
+        }
+    }
+
+    #[test]
+    fn key_release_does_not_trigger_quit_or_cancel() {
+        for (code, modifiers) in [
+            (KeyCode::Char('c'), KeyModifiers::CONTROL),
+            (KeyCode::Char('q'), KeyModifiers::NONE),
+            (KeyCode::Esc, KeyModifiers::NONE),
+        ] {
+            let mut key = KeyEvent::new(code, modifiers);
+            key.kind = KeyEventKind::Release;
+            assert_eq!(map_key_to_action(key, &AppMode::Normal), None);
+        }
     }
 }

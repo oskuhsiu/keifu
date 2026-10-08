@@ -183,8 +183,16 @@ fn help_lines() -> Vec<Line<'static>> {
             Span::styled("Toggle this help", desc_style),
         ]),
         Line::from(vec![
-            Span::styled("  q / Esc    ", key_style),
-            Span::styled("Quit", desc_style),
+            Span::styled("  Esc        ", key_style),
+            Span::styled("Back / cancel; never quit", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+C     ", key_style),
+            Span::styled("Quit Keifu from any view", desc_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  q          ", key_style),
+            Span::styled("Quit in Normal; back in help/diff", desc_style),
         ]),
     ]
 }

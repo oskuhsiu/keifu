@@ -148,7 +148,7 @@ struct SearchState {
     fuzzy_matches: Vec<FuzzySearchResult>,
     /// Selected index in the dropdown (None if no results)
     dropdown_selection: Option<usize>,
-    /// Position before search started (for cancel restoration)
+    /// Position before search started
     original_position: Option<usize>,
     /// Original node selection before search started
     original_node: Option<usize>,
@@ -1204,6 +1204,12 @@ impl App {
     /// Handle an action
     pub fn handle_action(&mut self, action: Action) -> Result<()> {
         self.request_redraw();
+        // Explicit quit (Ctrl+C in any mode, or q in Normal mode) always
+        // reaches the main loop's normal terminal-restoration path.
+        if action == Action::Quit {
+            self.should_quit = true;
+            return Ok(());
+        }
         match &self.mode {
             AppMode::Normal => self.handle_normal_action(action)?,
             AppMode::Help => self.handle_help_action(action),
@@ -1225,13 +1231,10 @@ impl App {
 
     fn handle_normal_action(&mut self, action: Action) -> Result<()> {
         match action {
-            Action::Quit => {
-                // Esc/q closes detail focus first, like closing a sub-view
-                if self.focused_pane == FocusedPane::Detail {
-                    self.focused_pane = FocusedPane::Graph;
-                } else {
-                    self.should_quit = true;
-                }
+            Action::Cancel => {
+                // Esc returns from Detail to Graph; at Graph it is a no-op.
+                // Returning/back must never be an alias for quitting.
+                self.focused_pane = FocusedPane::Graph;
             }
             Action::FocusNext => {
                 self.focused_pane = match self.focused_pane {
@@ -3063,5 +3066,143 @@ mod tests {
         assert!(app.diff_receiver.is_none());
         assert!(app.diff_loading_oid.is_none());
         assert!(!app.take_redraw_request());
+    }
+
+    fn exit_test_modes() -> Vec<AppMode> {
+        vec![
+            AppMode::Normal,
+            AppMode::Help,
+            AppMode::Input {
+                title: "Search".to_string(),
+                input: "query".to_string(),
+                action: InputAction::Search,
+            },
+            AppMode::Input {
+                title: "Branch".to_string(),
+                input: "new-branch".to_string(),
+                action: InputAction::CreateBranch,
+            },
+            AppMode::Input {
+                title: "Commit".to_string(),
+                input: "unsubmitted message".to_string(),
+                action: InputAction::CommitMessage,
+            },
+            AppMode::Confirm {
+                message: "Delete branch?".to_string(),
+                action: ConfirmAction::DeleteBranch("never-delete".to_string()),
+            },
+            AppMode::Error {
+                message: "Test error".to_string(),
+            },
+            AppMode::FileSelect {
+                selected_index: 0,
+                file_list: Vec::new(),
+            },
+            AppMode::FileDiff {
+                file_index: 0,
+                file_list: Vec::new(),
+                content: FileDiffContent {
+                    path: PathBuf::from("test.txt"),
+                    kind: crate::git::FileChangeKind::Modified,
+                    is_binary: false,
+                    hunks: Vec::new(),
+                    total_additions: 0,
+                    total_deletions: 0,
+                },
+                rendered_lines: Vec::new(),
+                hunk_positions: Vec::new(),
+                scroll_offset: 0,
+                horizontal_offset: 0,
+                max_line_width: 0,
+                total_lines: 0,
+            },
+        ]
+    }
+
+    fn press_exit_test_key(app: &mut App, key: crossterm::event::KeyEvent) {
+        if let Some(action) = crate::keybindings::map_key_to_action(key, &app.mode) {
+            app.handle_action(action).unwrap();
+        }
+    }
+
+    #[test]
+    fn repeated_escape_returns_to_graph_without_quitting_from_any_view() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        for mode in exit_test_modes() {
+            let mut app = idle_test_app();
+            app.mode = mode;
+            app.focused_pane = FocusedPane::Detail;
+            for _ in 0..5 {
+                press_exit_test_key(&mut app, escape);
+                assert!(!app.should_quit, "Esc must never request application exit");
+            }
+            assert!(matches!(app.mode, AppMode::Normal));
+            assert_eq!(app.focused_pane, FocusedPane::Graph);
+        }
+    }
+
+    #[test]
+    fn ctrl_c_quits_from_every_view_without_confirming_or_editing() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        for mode in exit_test_modes() {
+            let mut app = idle_test_app();
+            app.mode = mode;
+            app.focused_pane = FocusedPane::Detail;
+            let before = format!("{:?}", app.mode);
+            press_exit_test_key(&mut app, ctrl_c);
+            assert!(app.should_quit, "Ctrl+C must request exit even in a dialog");
+            assert_eq!(format!("{:?}", app.mode), before);
+            assert!(app.perf.ops().all(|(name, _)| name != "refresh"));
+        }
+    }
+
+    #[test]
+    fn q_quits_normal_view_but_keeps_existing_subview_and_text_behavior() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        for focus in [FocusedPane::Graph, FocusedPane::Detail] {
+            let mut app = idle_test_app();
+            app.focused_pane = focus;
+            press_exit_test_key(&mut app, q);
+            assert!(app.should_quit);
+        }
+        for mode in exit_test_modes().into_iter().skip(1) {
+            let mut app = idle_test_app();
+            app.mode = mode;
+            press_exit_test_key(&mut app, q);
+            assert!(!app.should_quit, "q in a subview must not become global quit");
+            if let AppMode::Input { input, .. } = &app.mode {
+                assert!(input.ends_with('q'));
+            }
+        }
+    }
+
+    #[test]
+    fn escape_from_full_diff_still_returns_to_file_selection_first() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let mut app = idle_test_app();
+        app.mode = exit_test_modes().pop().unwrap();
+        press_exit_test_key(&mut app, escape);
+        assert!(matches!(app.mode, AppMode::FileSelect { selected_index: 0, .. }));
+        assert!(!app.should_quit);
+        press_exit_test_key(&mut app, escape);
+        assert!(matches!(app.mode, AppMode::Normal));
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn detail_status_bar_back_click_cancels_instead_of_quitting() {
+        use ratatui::layout::Rect;
+        let mut app = idle_test_app();
+        app.focused_pane = FocusedPane::Detail;
+        let regions = crate::ui::status_bar::StatusBar::new(&app)
+            .hint_regions(Rect::new(0, 0, 240, 1));
+        assert!(regions.iter().any(|(_, action)| *action == Action::Cancel));
+        app.handle_action(Action::Cancel).unwrap();
+        assert_eq!(app.focused_pane, FocusedPane::Graph);
+        assert!(!app.should_quit);
     }
 }

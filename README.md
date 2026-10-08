@@ -176,7 +176,14 @@ in the Ghostty config works around it.
 | `o` | Toggle remote branches |
 | `t` | Toggle tags |
 | `?` | Toggle help |
-| `q` / `Esc` | Quit (returns focus to the graph first when the detail pane is focused) |
+| `Esc` | Back / cancel; return focus from Detail to Graph; never quit |
+| `Ctrl+C` | Quit Keifu from any view through normal terminal cleanup |
+| `q` | Quit in Normal mode; back/close in file, diff, help, and error views |
+
+`Esc` at the Graph root does nothing, so repeatedly backing out of a diff or
+dialog cannot accidentally close Keifu. `Ctrl+C` exits the application; it does
+not confirm a dialog or submit a commit message. Unsubmitted dialog text is not
+saved. In text-input dialogs, plain `q` and `c` remain ordinary characters.
 
 ## Notes and limitations
 

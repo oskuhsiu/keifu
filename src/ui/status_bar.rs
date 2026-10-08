@@ -104,8 +104,9 @@ impl StatusBar {
                 } else if app.focused_pane == FocusedPane::Detail {
                     hints.push(Hint::new("j/k", "scroll", None));
                     hints.push(Hint::new("Tab", "graph", Some(Action::FocusNext)));
-                    hints.push(Hint::new("Esc", "back", Some(Action::Quit)));
+                    hints.push(Hint::new("Esc", "back", Some(Action::Cancel)));
                     hints.push(Hint::new("?", "help", Some(Action::ToggleHelp)));
+                    hints.push(Hint::new("Ctrl+C/q", "quit", Some(Action::Quit)));
                 } else {
                     hints.push(Hint::new("j/k", "move", None));
                     hints.push(Hint::new("Enter", "checkout", Some(Action::Checkout)));
@@ -113,7 +114,7 @@ impl StatusBar {
                     hints.push(Hint::new("c", "commit", Some(Action::CommitDialog)));
                     hints.push(Hint::new("p", "push", Some(Action::Push)));
                     hints.push(Hint::new("?", "help", Some(Action::ToggleHelp)));
-                    hints.push(Hint::new("q", "quit", Some(Action::Quit)));
+                    hints.push(Hint::new("Ctrl+C/q", "quit", Some(Action::Quit)));
                 }
             }
             AppMode::Help => {
